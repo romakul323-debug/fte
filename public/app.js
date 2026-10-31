@@ -716,7 +716,14 @@ $('#messages').addEventListener('click', (e) => {
 
 /* =================== звонки (WebRTC, perfect negotiation) =================== */
 // «служба звонка» в Android-приложении: не даёт системе заморозить звук и микрофон в фоне
-const nativeCall = () => window.Capacitor?.Plugins?.VolnaCall || null;
+let nativeCallPlugin;
+const nativeCall = () => {
+  if (nativeCallPlugin === undefined) {
+    const C = window.Capacitor;
+    nativeCallPlugin = !isNative || !C ? null : C.Plugins?.VolnaCall || (C.registerPlugin ? C.registerPlugin('VolnaCall') : null);
+  }
+  return nativeCallPlugin;
+};
 let rejoin = null; // куда вернуться после обрыва связи
 
 async function joinVoice(chId, opts = {}) {

@@ -359,7 +359,11 @@ function connectSocket() {
   socket.on('connect', () => { fails = 0; everConnected = true; setNet(true); socket.emit('init', onInit); });
   socket.on('disconnect', () => {
     setNet(false);
-    if (call) { cleanupCall(); toast('Связь с сервером потеряна — звонок завершён'); }
+    if (call) {
+      rejoin = { channelId: call.channelId, muted: call.muted, deafened: call.deafened };
+      cleanupCall(true);
+      toast('Связь пропала — верну в голосовой канал, как только она появится');
+    }
   });
   bindSocket();
 }
@@ -375,6 +379,12 @@ function onInit(d) {
   if (!S.servers.some((s) => s.id === S.serverId)) S.serverId = S.servers[0]?.id || null;
   renderUser();
   selectServer(S.serverId, S.channelId || store.get('channelId'));
+  if (rejoin && !call) {
+    const r = rejoin;
+    rejoin = null;
+    if (findChannel(r.channelId)) joinVoice(r.channelId, r).then(() => toast('Снова в голосовом канале'));
+    else nativeCall()?.stop().catch(() => {});
+  }
 }
 
 function bindSocket() {
@@ -660,7 +670,17 @@ function renderMembers() {
 
 let unseen = 0;
 function bumpTitle() { unseen++; document.title = `(${unseen}) Волна`; }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { unseen = 0; document.title = 'Волна'; } });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  unseen = 0;
+  document.title = 'Волна';
+  // вернулись в приложение: телефон мог приостановить звук — запускаем снова
+  if (call) {
+    audioCtx?.resume?.();
+    document.querySelectorAll('#audios audio').forEach((el) => el.play().catch(() => {}));
+  }
+  if (socket && !socket.connected) socket.connect();
+});
 
 /* =================== отправка сообщений =================== */
 const input = $('#msgInput');
@@ -695,12 +715,16 @@ $('#messages').addEventListener('click', (e) => {
 });
 
 /* =================== звонки (WebRTC, perfect negotiation) =================== */
-async function joinVoice(chId) {
+// «служба звонка» в Android-приложении: не даёт системе заморозить звук и микрофон в фоне
+const nativeCall = () => window.Capacitor?.Plugins?.VolnaCall || null;
+let rejoin = null; // куда вернуться после обрыва связи
+
+async function joinVoice(chId, opts = {}) {
   if (call?.channelId === chId) return;
   if (call) leaveVoice();
   if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia)
     return toast('Звонки работают только по HTTPS (или на localhost)');
-  const me = (call = { channelId: chId, selfId: socket.id, stream: null, muted: false, deafened: false, prevMuted: false, video: false, screen: false, videoTrack: null, localVideo: null });
+  const me = (call = { channelId: chId, selfId: socket.id, stream: null, muted: !!opts.muted, deafened: !!opts.deafened, prevMuted: false, video: false, screen: false, videoTrack: null, localVideo: null });
   // AudioContext создаём сразу в обработчике клика — иначе iOS его не запустит
   try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch {}
   try {
@@ -715,7 +739,11 @@ async function joinVoice(chId) {
     if (res?.error) { toast(res.error); cleanupCall(); return; }
     me.selfId = socket.id;
     if (me.stream) addMeter(me.selfId, me.stream);
+    if (me.muted) setMic(false);
+    if (me.deafened) applyDeafen();
+    if (me.muted || me.deafened) socket.emit('voice:update', { muted: me.muted, deafened: me.deafened });
     startRelay(me);
+    nativeCall()?.start({ title: findChannel(chId)?.name || 'Голосовой канал' }).catch(() => {});
     for (const p of res.peers) ensurePeer(p.socketId);
     renderSidebar();
     renderMain();
@@ -801,13 +829,15 @@ function closePeer(id) {
 }
 
 function leaveVoice() {
+  rejoin = null;
   if (!call) return;
   socket?.emit('voice:leave');
   cleanupCall();
 }
 
-function cleanupCall() {
+function cleanupCall(keepService) {
   if (!call) return;
+  if (!keepService) nativeCall()?.stop().catch(() => {});
   for (const id of [...peers.keys()]) closePeer(id);
   call.stream?.getTracks().forEach((t) => t.stop());
   call.videoTrack?.stop();

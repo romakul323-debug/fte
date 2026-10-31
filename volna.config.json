@@ -1,5 +1,6 @@
 {
   "discovery": "https://ntfy.sh/volna-e45fb57090fa1733e60a",
   "android": "https://github.com/romakul323-debug/fte/releases/latest/download/Volna.apk",
-  "server": ""
+  "server": "https://eager-penguin-4025.a.tuna.free",
+  "tunaDomain": "eager-penguin-4025.a.tuna.free"
 }

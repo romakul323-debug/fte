@@ -724,8 +724,12 @@ async function announce(url) {
 // ---------- Tuna (российский туннель, бесплатный постоянный адрес, работает без VPN) ----------
 const TUNA_FILE = path.join(db.DIR, 'tuna.json');
 function tunaConfig() {
-  if (process.env.TUNA_API_KEY) return { apiKey: process.env.TUNA_API_KEY, subdomain: process.env.TUNA_SUBDOMAIN || '' };
-  try { return JSON.parse(fs.readFileSync(TUNA_FILE, 'utf8')); } catch { return null; }
+  const fixedDomain = CFG.tunaDomain || process.env.TUNA_DOMAIN || '';
+  let c = null;
+  if (process.env.TUNA_API_KEY) c = { apiKey: process.env.TUNA_API_KEY, subdomain: process.env.TUNA_SUBDOMAIN || '' };
+  else try { c = JSON.parse(fs.readFileSync(TUNA_FILE, 'utf8')); } catch {}
+  if (c && fixedDomain && !c.subdomain) c.subdomain = fixedDomain;
+  return c;
 }
 function ask(q) {
   return new Promise((resolve) => {
@@ -741,7 +745,7 @@ async function setupTuna() {
   console.log('  3) скопируй имя бесплатного постоянного поддомена из личного кабинета.\n');
   const apiKey = await ask('  Вставь API-ключ Tuna (правый клик в этом окне = вставить) и нажми Enter: ');
   if (!apiKey) return null; // спросим снова при следующем запуске
-  const subdomain = (await ask('  Постоянный поддомен (Enter — без него, адрес будет меняться): ')).replace(/\..*$/, '');
+  const subdomain = CFG.tunaDomain || (await ask('  Постоянный домен из кабинета Tuna (Enter — без него, адрес будет меняться): '));
   cfg = { apiKey, subdomain };
   fs.writeFileSync(TUNA_FILE, JSON.stringify(cfg));
   console.log('  Сохранено в data/tuna.json\n');
@@ -782,8 +786,9 @@ async function startTunnel() {
     try {
       const bin = await tunaBin();
       const args = ['http', String(PORT)];
-      if (tuna.subdomain) args.push(`--subdomain=${tuna.subdomain}`);
-      t = { name: 'Tuna', bin, args, env: { ...process.env, TUNA_API_KEY: tuna.apiKey }, re: /https:\/\/[a-z0-9-]+\.(?:[a-z]{2}\.)?tuna\.am/ };
+      // полное имя (xxx.a.tuna.free / xxx.ru.tuna.am) — через --domain, просто имя — через --subdomain
+      if (tuna.subdomain) args.push(tuna.subdomain.includes('.') ? `--domain=${tuna.subdomain}` : `--subdomain=${tuna.subdomain}`);
+      t = { name: 'Tuna', bin, args, env: { ...process.env, TUNA_API_KEY: tuna.apiKey }, re: tuna.subdomain && tuna.subdomain.includes('.') ? new RegExp('(?:https://)?' + tuna.subdomain.replace(/\./g, '\\.')) : /https:\/\/[a-z0-9]+(?:-[a-z0-9]+)+(?:\.[a-z0-9-]+)*\.tuna\.(?:am|free)\b/ };
     } catch (e) {
       console.log('  ! Tuna не запустился:', e.message, '— беру Cloudflare');
     }
@@ -805,7 +810,7 @@ async function startTunnel() {
       if (!m || found) return;
       found = true;
       fails = 0;
-      publicUrl = m[0];
+      publicUrl = m[0].startsWith('http') ? m[0] : 'https://' + m[0];
       console.log(`\n  ✅ Сервер доступен из интернета: ${publicUrl}`);
       console.log('     Не закрывай это окно — пока оно открыто, Волна работает.\n');
       setTimeout(() => announce(publicUrl), 4000);

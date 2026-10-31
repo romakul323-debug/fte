@@ -26,9 +26,11 @@
     <div id="authError" class="error"></div>
     <button class="btn primary" id="authSubmit">Войти</button>
     <button type="button" class="link" id="authToggle">Нет аккаунта? Зарегистрироваться</button>
+    <button type="button" class="link small" id="serverToggle" hidden>Указать свой сервер</button>
   </form>
 </div>
 
+<div id="netbar" class="netbar" hidden><span></span><button type="button" class="link" id="netChange">Сменить сервер</button></div>
 <div id="app" class="app" hidden>
   <nav id="servers" class="servers"></nav>
   <aside id="sidebar" class="sidebar">

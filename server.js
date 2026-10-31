@@ -8,7 +8,16 @@ const express = require('express');
 const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { spawn, spawnSync } = require('child_process');
+const https = require('https');
 const db = require('./db');
+
+// общие настройки сервера и приложений (адрес публикации ссылки, ссылка на APK)
+const CFG = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'volna.config.json'), 'utf8')); } catch { return {}; }
+})();
+const TUNNEL = process.argv.includes('--tunnel') || process.env.TUNNEL === '1';
+let publicUrl = null;
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_VOICE = 10; // звонки идут напрямую между участниками (mesh), больше 10 тяжело
@@ -86,6 +95,11 @@ app.use('/api', (req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
+app.get('/config.js', (req, res) => {
+  res.type('application/javascript').set('Cache-Control', 'no-cache').send(
+    `window.VOLNA_SERVER = '';\nwindow.VOLNA_DISCOVERY = '';\nwindow.VOLNA_ANDROID = ${JSON.stringify(CFG.android || '')};\n`
+  );
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 const NAME_RE = /^[\p{L}\p{N}_.\-]{2,24}$/u;
@@ -127,7 +141,7 @@ app.get('/api/config', (req, res) => {
       credential: process.env.TURN_PASS,
     });
   }
-  res.json({ iceServers });
+  res.json({ iceServers, publicUrl });
 });
 
 // ---------- Socket.IO ----------
@@ -435,11 +449,97 @@ server.listen(PORT, () => {
   for (const list of Object.values(os.networkInterfaces()))
     for (const a of list || [])
       if (a.family === 'IPv4' && !a.internal) console.log(`  В локальной сети: http://${a.address}:${PORT}`);
-  console.log('  (для звонков с телефона нужен HTTPS — см. README)\n');
+  if (TUNNEL) startTunnel();
+  else console.log('  (для доступа из интернета запусти с --tunnel или через start.bat)\n');
 });
+
+// ---------- туннель в интернет (Cloudflare Quick Tunnel) ----------
+function download(url, dest, redirects = 8) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, { headers: { 'User-Agent': 'volna' } }, (r) => {
+        if ([301, 302, 303, 307, 308].includes(r.statusCode) && r.headers.location && redirects > 0) {
+          r.resume();
+          return download(new URL(r.headers.location, url).href, dest, redirects - 1).then(resolve, reject);
+        }
+        if (r.statusCode !== 200) { r.resume(); return reject(new Error('HTTP ' + r.statusCode)); }
+        const tmp = dest + '.part';
+        const f = fs.createWriteStream(tmp);
+        r.pipe(f);
+        f.on('finish', () => f.close(() => { fs.renameSync(tmp, dest); resolve(); }));
+        f.on('error', reject);
+      })
+      .on('error', reject);
+  });
+}
+
+async function cloudflaredBin() {
+  const exe = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+  const local = path.join(__dirname, 'tools', exe);
+  if (fs.existsSync(local)) return local;
+  if (spawnSync(process.platform === 'win32' ? 'where' : 'which', ['cloudflared']).status === 0) return 'cloudflared';
+  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const file = { win32: `cloudflared-windows-${arch}.exe`, linux: `cloudflared-linux-${arch}` }[process.platform];
+  if (!file) throw new Error('установи cloudflared вручную (brew install cloudflared)');
+  console.log('  Скачиваю cloudflared (один раз)…');
+  fs.mkdirSync(path.dirname(local), { recursive: true });
+  await download(`https://github.com/cloudflare/cloudflared/releases/latest/download/${file}`, local);
+  if (process.platform !== 'win32') fs.chmodSync(local, 0o755);
+  return local;
+}
+
+async function announce(url) {
+  if (!CFG.discovery) return;
+  try {
+    const r = await fetch(CFG.discovery, { method: 'POST', body: url, headers: { Title: 'volna-server' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (e) {
+    console.log('  ! Не удалось опубликовать адрес для приложений:', e.message);
+  }
+}
+
+let tunnelProc = null;
+async function startTunnel() {
+  let bin;
+  try { bin = await cloudflaredBin(); } catch (e) { console.log('  ! Туннель не запущен:', e.message); return; }
+  let fails = 0;
+  const run = () => {
+    console.log('  Поднимаю туннель в интернет…');
+    const p = spawn(bin, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    tunnelProc = p;
+    let found = false;
+    const onData = (buf) => {
+      const m = String(buf).match(/https:\/\/(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com/);
+      if (!m || found) return;
+      found = true;
+      fails = 0;
+      publicUrl = m[0];
+      console.log(`\n  ✅ Сервер доступен из интернета: ${publicUrl}`);
+      console.log('     Приложения на телефонах подключатся сами. Не закрывай это окно.\n');
+      // ссылке нужно несколько секунд, чтобы заработать — публикуем чуть позже
+      setTimeout(() => announce(publicUrl), 4000);
+    };
+    p.stdout.on('data', onData);
+    p.stderr.on('data', onData);
+    p.on('error', (e) => console.log('  ! cloudflared:', e.message));
+    p.on('exit', (code) => {
+      if (tunnelProc !== p) return;
+      publicUrl = null;
+      const wait = Math.min(60, 5 * 2 ** fails++);
+      console.log(`  Туннель остановился (код ${code}), перезапускаю через ${wait} сек… (проверь интернет)`);
+      setTimeout(run, wait * 1000);
+    });
+  };
+  run();
+  // напоминаем адрес, чтобы он не пропал из кэша
+  setInterval(() => { if (publicUrl) announce(publicUrl); }, 20 * 60 * 1000);
+}
 
 for (const sig of ['SIGINT', 'SIGTERM'])
   process.on(sig, () => {
     db.flush();
+    const p = tunnelProc;
+    tunnelProc = null;
+    p?.kill();
     process.exit(0);
   });

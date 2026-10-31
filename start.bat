@@ -1,17 +1,23 @@
 @echo off
 cd /d "%~dp0"
 title Volna server
-where node >/dev/null 2>nul
-if errorlevel 1 (
-  echo Node.js not found. Install LTS from https://nodejs.org and run again.
-  start https://nodejs.org
-  pause
-  exit /b
-)
-if not exist node_modules (
-  echo Installing dependencies, first run only...
-  call npm install --no-audit --no-fund
-)
+set "PATH=%~dp0tools\node;%PATH%"
+where node >nul 2>nul
+if not errorlevel 1 goto havenode
+echo Node.js not found, downloading portable Node.js - one time only...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\get-node.ps1"
+where node >nul 2>nul
+if errorlevel 1 goto nonode
+:havenode
+if exist node_modules\express\package.json goto run
+echo Installing dependencies - one time only...
+call npm install --no-audit --no-fund --omit=dev
+:run
 start "" http://localhost:3000
-node server.js
+node server.js --tunnel
+pause
+exit /b
+:nonode
+echo Could not install Node.js. Install it from https://nodejs.org and run start.bat again.
+start https://nodejs.org
 pause

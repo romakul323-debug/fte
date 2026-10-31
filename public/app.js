@@ -15,7 +15,38 @@ const normUrl = (u) => {
   if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u;
   return u;
 };
-let API = isNative ? normUrl(store.get('serverUrl') || window.VOLNA_SERVER || '') : '';
+const FIXED = normUrl(window.VOLNA_SERVER || '');            // адрес, вшитый в сборку (если есть)
+const DISCOVERY = window.VOLNA_DISCOVERY || '';               // откуда приложение узнаёт текущий адрес сервера
+let API = isNative ? FIXED || normUrl(store.get('serverUrl') || '') : '';
+const isManual = () => isNative && store.get('serverManual') === '1';
+
+async function fetchT(url, opts = {}, ms = 6000) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: c.signal }); } finally { clearTimeout(t); }
+}
+// Сервер при запуске публикует свою свежую ссылку — забираем последнюю
+async function discover() {
+  if (!DISCOVERY) return null;
+  try {
+    const r = await fetchT(DISCOVERY + '/json?poll=1&since=12h');
+    let url = null;
+    for (const line of (await r.text()).split('\n')) {
+      try {
+        const m = JSON.parse(line);
+        const u = String(m.message || '').trim();
+        if (m.event === 'message' && /^https:\/\/[\w.-]+(:\d+)?$/.test(u)) url = u;
+      } catch {}
+    }
+    return url;
+  } catch { return null; }
+}
+async function resolveServer() {
+  if (!isNative || FIXED || isManual()) return API;
+  const found = await discover();
+  if (found) { API = found; store.set('serverUrl', found); }
+  return API;
+}
 const canScreen = !!navigator.mediaDevices?.getDisplayMedia && !isTouch;
 
 const I = (d) => `<svg viewBox="0 0 24 24">${d}</svg>`;
@@ -101,9 +132,30 @@ let registerMode = false;
 function showAuth(err) {
   $('#app').hidden = true;
   $('#auth').hidden = false;
-  if (isNative) { $('#serverField').hidden = false; $('#authServer').value = API; }
+  if (isNative) {
+    // поле адреса показываем, только если сервер не нашёлся сам или пользователь задал свой
+    const showField = !FIXED && (isManual() || !DISCOVERY || !API);
+    $('#serverField').hidden = !showField;
+    $('#authServer').value = API;
+    $('#serverToggle').hidden = !!FIXED;
+    $('#serverToggle').textContent = showField ? 'Искать сервер автоматически' : 'Указать свой сервер';
+  }
   if (err) $('#authError').textContent = err;
 }
+$('#serverToggle').onclick = async () => {
+  const manual = !$('#serverField').hidden;
+  if (manual) {
+    store.set('serverManual', null);
+    $('#serverField').hidden = true;
+    $('#serverToggle').textContent = 'Указать свой сервер';
+    await resolveServer();
+  } else {
+    $('#serverField').hidden = false;
+    $('#authServer').value = API;
+    $('#authServer').focus();
+    $('#serverToggle').textContent = 'Искать сервер автоматически';
+  }
+};
 $('#authToggle').onclick = () => {
   registerMode = !registerMode;
   $('#authSub').textContent = registerMode ? 'Создать аккаунт' : 'Вход в аккаунт';
@@ -112,30 +164,49 @@ $('#authToggle').onclick = () => {
   $('#authPass').autocomplete = registerMode ? 'new-password' : 'current-password';
   $('#authError').textContent = '';
 };
+const isNetErr = (err) => err instanceof TypeError || err?.name === 'AbortError' || /fetch|load failed|network|abort/i.test(err?.message || '');
+async function authRequest() {
+  const r = await fetchT(API + '/api/' + (registerMode ? 'register' : 'login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: $('#authUser').value, password: $('#authPass').value }),
+  }, 12000);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Ошибка');
+  return d;
+}
 $('#authForm').onsubmit = async (e) => {
   e.preventDefault();
   const btn = $('#authSubmit');
   btn.disabled = true;
   $('#authError').textContent = '';
   try {
-    if (isNative) {
+    if (isNative && !$('#serverField').hidden) {
       API = normUrl($('#authServer').value);
       if (!API) throw new Error('Укажи адрес сервера');
       store.set('serverUrl', API);
+      store.set('serverManual', '1');
+    } else if (isNative && !API) {
+      await resolveServer();
     }
-    const r = await fetch(API + '/api/' + (registerMode ? 'register' : 'login'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: $('#authUser').value, password: $('#authPass').value }),
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'Ошибка');
+    if (isNative && !API) throw new Error('Сервер сейчас выключен. Попроси владельца запустить его (start.bat).');
+    let d;
+    try { d = await authRequest(); }
+    catch (err) {
+      // ссылка могла смениться — ищем свежую и пробуем ещё раз
+      if (!isNetErr(err) || !isNative || FIXED || isManual()) throw err;
+      const old = API;
+      await resolveServer();
+      if (API === old) throw err;
+      d = await authRequest();
+    }
     S.token = d.token;
     store.set('token', d.token);
     start();
   } catch (err) {
-    const net = err instanceof TypeError || /fetch|load failed|network/i.test(err.message);
-    $('#authError').textContent = net ? 'Сервер недоступен — проверь адрес и что сервер запущен' : err.message;
+    $('#authError').textContent = isNetErr(err)
+      ? (isNative && !isManual() ? 'Сервер сейчас не в сети. Попроси владельца запустить его (start.bat).' : 'Сервер недоступен — проверь адрес и что сервер запущен')
+      : err.message;
   } finally {
     btn.disabled = false;
   }
@@ -148,23 +219,39 @@ function logout() {
 }
 
 /* =================== подключение =================== */
+let everConnected = false;
+function setNet(ok, text) {
+  const bar = $('#netbar');
+  bar.hidden = ok;
+  if (!ok) bar.querySelector('span').textContent = text || 'Нет связи с сервером, переподключаюсь…';
+}
 async function start() {
   $('#auth').hidden = true;
   $('#app').hidden = false;
-  try { S.ice = (await (await fetch(API + '/api/config')).json()).iceServers; } catch {}
+  connectSocket();
+}
+function connectSocket() {
+  if (socket) { socket.removeAllListeners(); socket.disconnect(); }
+  fetchT(API + '/api/config').then((r) => r.json()).then((c) => { S.ice = c.iceServers; S.publicUrl = c.publicUrl || null; }).catch(() => {});
   socket = io(API || undefined, { auth: { token: S.token } });
-  // если сервер так и не ответил (например, сменилась ссылка туннеля) — даём поменять адрес
-  setTimeout(() => {
-    if (S.user || !socket || socket.connected) return;
-    socket.disconnect();
-    socket = null;
-    showAuth('Не удалось подключиться к серверу. Проверь адрес и войди заново.');
-  }, 10000);
-  socket.on('connect_error', (err) => {
-    if (err.message === 'auth') { store.set('token', null); location.reload(); }
+  let fails = 0, rediscovering = false;
+  socket.on('connect_error', async (err) => {
+    if (err.message === 'auth') { store.set('token', null); location.reload(); return; }
+    fails++;
+    setNet(false, everConnected ? null : 'Подключаюсь к серверу…');
+    // каждые несколько неудач проверяем, не сменилась ли ссылка сервера
+    if (fails % 3 === 1 && isNative && !FIXED && !isManual() && !rediscovering) {
+      rediscovering = true;
+      const old = API;
+      await resolveServer();
+      rediscovering = false;
+      if (API !== old) { connectSocket(); return; }
+    }
+    if (fails >= 4) setNet(false, 'Сервер не в сети. Как только его запустят, всё подключится само.');
   });
-  socket.on('connect', () => socket.emit('init', onInit));
+  socket.on('connect', () => { fails = 0; everConnected = true; setNet(true); socket.emit('init', onInit); });
   socket.on('disconnect', () => {
+    setNet(false);
     if (call) { cleanupCall(); toast('Связь с сервером потеряна — звонок завершён'); }
   });
   bindSocket();
@@ -779,7 +866,7 @@ function inviteModal() {
     <button class="btn primary" id="copyInv">Скопировать приглашение</button>
     <button class="btn ghost" data-close>Готово</button>`, (m) => {
     m.querySelector('#copyInv').onclick = async () => {
-      const text = `Заходи ко мне в «${s.name}» в Волне: ${API || location.origin}\nКод приглашения: ${s.invite}`;
+      const text = `Заходи ко мне в «${s.name}» в Волне: ${S.publicUrl || API || location.origin}${window.VOLNA_ANDROID ? `\nПриложение для Android: ${window.VOLNA_ANDROID}` : ''}\nКод приглашения: ${s.invite}`;
       try {
         if (navigator.share && isTouch) await navigator.share({ text });
         else { await navigator.clipboard.writeText(text); toast('Скопировано'); }
@@ -882,6 +969,8 @@ $('#sendBtn').innerHTML = ICON.send;
 function closeDrawer() { document.body.classList.remove('drawer'); }
 $('#menuBtn').onclick = () => document.body.classList.toggle('drawer');
 $('#membersBtn').onclick = () => document.body.classList.toggle('show-members');
+$('#netChange').onclick = () => { store.set('token', null); store.set('serverManual', '1'); location.reload(); };
+$('#netChange').hidden = !isNative || !!FIXED;
 $('#scrim').onclick = () => document.body.classList.remove('drawer', 'show-members');
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeModal(); document.body.classList.remove('drawer'); }
@@ -900,4 +989,8 @@ if (isNative) document.body.classList.add('native');
 
 /* =================== старт =================== */
 if (innerWidth > 1100) document.body.classList.add('show-members');
-if (S.token) start(); else showAuth();
+(async () => {
+  if (isNative && !API) await resolveServer();
+  else if (isNative) resolveServer(); // проверим свежую ссылку в фоне
+  if (S.token) start(); else showAuth();
+})();

@@ -195,3 +195,7 @@ body:not(.show-members) .members { display: none; }
   .tiles.many { grid-template-columns: 1fr 1fr; }
   .ctl { width: 48px; height: 48px; }
 }
+
+.link.small { font-size: 13px; color: var(--muted); }
+.netbar { position: fixed; top: var(--safe-t); left: 0; right: 0; z-index: 40; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 6px 12px; background: #b5470d; color: #fff; font-size: 13px; font-weight: 600; text-align: center; }
+.netbar .link { color: #fff; text-decoration: underline; font-size: 13px; }

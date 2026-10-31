@@ -737,10 +737,10 @@ async function setupTuna() {
   let cfg = tunaConfig();
   if (cfg || !process.stdin.isTTY) return cfg;
   console.log('\n  Постоянный адрес без VPN даёт Tuna (tuna.am), бесплатно.');
-  console.log('  1) Зарегистрируйся на https://tuna.am  2) скопируй API-ключ (начинается с tak_)');
+  console.log('  1) Зарегистрируйся на https://tuna.am  2) скопируй API-ключ из личного кабинета (начинается с tak_)');
   console.log('  3) скопируй имя бесплатного постоянного поддомена из личного кабинета.\n');
-  const apiKey = await ask('  API-ключ Tuna (Enter — пропустить и взять временный туннель Cloudflare): ');
-  if (!apiKey) { fs.writeFileSync(TUNA_FILE, JSON.stringify({ skip: true })); return null; }
+  const apiKey = await ask('  Вставь API-ключ Tuna (правый клик в этом окне = вставить) и нажми Enter: ');
+  if (!apiKey) return null; // спросим снова при следующем запуске
   const subdomain = (await ask('  Постоянный поддомен (Enter — без него, адрес будет меняться): ')).replace(/\..*$/, '');
   cfg = { apiKey, subdomain };
   fs.writeFileSync(TUNA_FILE, JSON.stringify(cfg));

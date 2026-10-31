@@ -48,6 +48,13 @@
 
 Бесплатный Render засыпает после 15 минут тишины; сервер сам себя будит раз в 10 минут, чтобы этого не было (выключается переменной `KEEP_AWAKE=0`). Лимит — 750 часов в месяц, этого хватает на один сервер круглосуточно. Каждый push в ветку `volna` обновляет сервер автоматически.
 
+## Вход через Google и по коду на почту
+
+Кнопки появляются сами, как только на сервере заданы переменные (Render → сервис volna → Environment):
+
+- **Google:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — из Google Cloud Console → APIs & Services → Credentials → OAuth client ID (тип «Web application»). В «Authorized redirect URIs» добавь `https://volna-r9gy.onrender.com/auth/google/callback`.
+- **Код на почту:** `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (и по желанию `SMTP_FROM`). Для Gmail: `smtp.gmail.com`, `465`, твоя почта и пароль приложения (myaccount.google.com/apppasswords).
+
 ## Структура
 
 ```

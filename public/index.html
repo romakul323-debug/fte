@@ -16,18 +16,50 @@
 </head>
 <body>
 <div id="auth" class="auth" hidden>
-  <form id="authForm" class="auth-card">
+  <div class="auth-card">
     <img class="logo" src="icons/icon-192.png" alt="">
     <h1>Волна</h1>
-    <p id="authSub" class="muted">Вход в аккаунт</p>
-    <label id="serverField" hidden>Адрес сервера<input id="authServer" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://xxx.trycloudflare.com"></label>
-    <label>Ник<input id="authUser" autocomplete="username" autocapitalize="off" spellcheck="false" required minlength="2" maxlength="24"></label>
-    <label>Пароль<input id="authPass" type="password" autocomplete="current-password" required minlength="6"></label>
+    <p class="muted">Голос, чат и свои серверы для своих</p>
+
+    <label id="serverField" hidden>Адрес сервера<input id="authServer" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://xxx.onrender.com"></label>
+
+    <button type="button" class="btn google" id="googleBtn" hidden>Продолжить с Google</button>
+    <div class="or" id="authOr" hidden>или</div>
+
+    <div class="seg" id="authSeg" hidden>
+      <button type="button" data-tab="pass" class="on">Ник и пароль</button>
+      <button type="button" data-tab="code">Код на почту</button>
+    </div>
+
+    <form id="authForm">
+      <label><span id="loginLabel">Ник или почта</span><input id="authUser" autocomplete="username" autocapitalize="off" spellcheck="false" required minlength="2" maxlength="60"></label>
+      <label>Пароль<input id="authPass" type="password" autocomplete="current-password" required minlength="6"></label>
+      <button class="btn primary" id="authSubmit">Войти</button>
+      <button type="button" class="link" id="authToggle">Нет аккаунта? Создать</button>
+    </form>
+
+    <form id="codeForm" hidden>
+      <div id="codeStep1">
+        <label>Почта<input id="codeEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@gmail.com"></label>
+      </div>
+      <div id="codeStep2" hidden>
+        <p class="hint-line" id="codeSentTo"></p>
+        <input id="codeValue" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-label="Код из письма">
+      </div>
+      <div id="codeStep3" hidden>
+        <p class="hint-line">Почта подтверждена. Как тебя называть?</p>
+        <label>Ник<input id="codeNick" autocapitalize="off" spellcheck="false" maxlength="24"></label>
+      </div>
+      <button class="btn primary" id="codeSubmit">Получить код</button>
+      <div class="row-links" id="codeLinks" hidden>
+        <button type="button" class="link small" id="codeBack">Другая почта</button>
+        <button type="button" class="link small" id="codeResend">Отправить код ещё раз</button>
+      </div>
+    </form>
+
     <div id="authError" class="error"></div>
-    <button class="btn primary" id="authSubmit">Войти</button>
-    <button type="button" class="link" id="authToggle">Нет аккаунта? Зарегистрироваться</button>
     <button type="button" class="link small" id="serverToggle" hidden>Указать свой сервер</button>
-  </form>
+  </div>
 </div>
 
 <div id="netbar" class="netbar" hidden><span></span><button type="button" class="link" id="netChange">Сменить сервер</button></div>

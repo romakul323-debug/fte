@@ -129,6 +129,9 @@ function upsertServer(s) {
 
 /* =================== вход =================== */
 let registerMode = false;
+let authOpts = { google: false, email: false };
+const authErr = (t) => { $('#authError').textContent = t || ''; };
+
 function showAuth(err) {
   $('#app').hidden = true;
   $('#auth').hidden = false;
@@ -140,7 +143,17 @@ function showAuth(err) {
     $('#serverToggle').hidden = !!FIXED;
     $('#serverToggle').textContent = showField ? 'Искать сервер автоматически' : 'Указать свой сервер';
   }
-  if (err) $('#authError').textContent = err;
+  authErr(err);
+  loadAuthOptions();
+}
+async function loadAuthOptions() {
+  if (isNative && !API) return;
+  try {
+    authOpts = await (await fetchT(API + '/api/auth/options', {}, 15000)).json();
+  } catch { authOpts = { google: false, email: false }; }
+  $('#googleBtn').hidden = !authOpts.google;
+  $('#authSeg').hidden = !authOpts.email;
+  $('#authOr').hidden = !authOpts.google;
 }
 $('#serverToggle').onclick = async () => {
   const manual = !$('#serverField').hidden;
@@ -149,6 +162,7 @@ $('#serverToggle').onclick = async () => {
     $('#serverField').hidden = true;
     $('#serverToggle').textContent = 'Указать свой сервер';
     await resolveServer();
+    loadAuthOptions();
   } else {
     $('#serverField').hidden = false;
     $('#authServer').value = API;
@@ -156,61 +170,152 @@ $('#serverToggle').onclick = async () => {
     $('#serverToggle').textContent = 'Искать сервер автоматически';
   }
 };
+$('#authServer').addEventListener('change', () => {
+  API = normUrl($('#authServer').value);
+  store.set('serverUrl', API);
+  store.set('serverManual', '1');
+  loadAuthOptions();
+});
+
+const isNetErr = (err) => err instanceof TypeError || err?.name === 'AbortError' || /fetch|load failed|network|abort/i.test(err?.message || '');
+async function ensureApi() {
+  if (isNative && !$('#serverField').hidden) {
+    API = normUrl($('#authServer').value);
+    if (!API) throw new Error('Укажи адрес сервера');
+    store.set('serverUrl', API);
+    store.set('serverManual', '1');
+  } else if (isNative && !API) {
+    await resolveServer();
+  }
+  if (isNative && !API) throw new Error('Сервер сейчас выключен. Попроси владельца запустить его.');
+}
+// POST к серверу; если ссылка сервера сменилась — находим новую и повторяем
+async function apiPost(path, body) {
+  await ensureApi();
+  const once = async () => {
+    const r = await fetchT(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 20000);
+    let d = {};
+    try { d = await r.json(); } catch {}
+    if (!r.ok) throw new Error(d.error || 'Сервер просыпается — попробуй ещё раз через полминуты');
+    return d;
+  };
+  try { return await once(); }
+  catch (err) {
+    if (!isNetErr(err) || !isNative || FIXED || isManual()) throw err;
+    const old = API;
+    await resolveServer();
+    if (API === old) throw err;
+    return once();
+  }
+}
+const netMsg = () => isNative && !isManual() ? 'Сервер сейчас не в сети — попробуй через минуту.' : 'Сервер недоступен — проверь адрес и что сервер запущен';
+function loggedIn(d) {
+  S.token = d.token;
+  store.set('token', d.token);
+  start();
+}
+async function withBusy(btn, fn) {
+  btn.disabled = true;
+  authErr('');
+  try { await fn(); }
+  catch (err) { authErr(isNetErr(err) ? netMsg() : err.message); }
+  finally { btn.disabled = false; }
+}
+
+// --- переключатель «Ник и пароль / Код на почту»
+$('#authSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tab]');
+  if (!b) return;
+  for (const x of $('#authSeg').children) x.classList.toggle('on', x === b);
+  $('#authForm').hidden = b.dataset.tab !== 'pass';
+  $('#codeForm').hidden = b.dataset.tab !== 'code';
+  authErr('');
+});
+
+// --- ник и пароль
 $('#authToggle').onclick = () => {
   registerMode = !registerMode;
-  $('#authSub').textContent = registerMode ? 'Создать аккаунт' : 'Вход в аккаунт';
-  $('#authSubmit').textContent = registerMode ? 'Зарегистрироваться' : 'Войти';
-  $('#authToggle').textContent = registerMode ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться';
+  $('#loginLabel').textContent = registerMode ? 'Ник' : 'Ник или почта';
+  $('#authUser').maxLength = registerMode ? 24 : 60;
+  $('#authSubmit').textContent = registerMode ? 'Создать аккаунт' : 'Войти';
+  $('#authToggle').textContent = registerMode ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Создать';
   $('#authPass').autocomplete = registerMode ? 'new-password' : 'current-password';
-  $('#authError').textContent = '';
+  authErr('');
 };
-const isNetErr = (err) => err instanceof TypeError || err?.name === 'AbortError' || /fetch|load failed|network|abort/i.test(err?.message || '');
-async function authRequest() {
-  const r = await fetchT(API + '/api/' + (registerMode ? 'register' : 'login'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: $('#authUser').value, password: $('#authPass').value }),
-  }, 12000);
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.error || 'Ошибка');
-  return d;
-}
-$('#authForm').onsubmit = async (e) => {
+$('#authForm').onsubmit = (e) => {
   e.preventDefault();
-  const btn = $('#authSubmit');
-  btn.disabled = true;
-  $('#authError').textContent = '';
-  try {
-    if (isNative && !$('#serverField').hidden) {
-      API = normUrl($('#authServer').value);
-      if (!API) throw new Error('Укажи адрес сервера');
-      store.set('serverUrl', API);
-      store.set('serverManual', '1');
-    } else if (isNative && !API) {
-      await resolveServer();
-    }
-    if (isNative && !API) throw new Error('Сервер сейчас выключен. Попроси владельца запустить его (start.bat).');
-    let d;
-    try { d = await authRequest(); }
-    catch (err) {
-      // ссылка могла смениться — ищем свежую и пробуем ещё раз
-      if (!isNetErr(err) || !isNative || FIXED || isManual()) throw err;
-      const old = API;
-      await resolveServer();
-      if (API === old) throw err;
-      d = await authRequest();
-    }
-    S.token = d.token;
-    store.set('token', d.token);
-    start();
-  } catch (err) {
-    $('#authError').textContent = isNetErr(err)
-      ? (isNative && !isManual() ? 'Сервер сейчас не в сети. Попроси владельца запустить его (start.bat).' : 'Сервер недоступен — проверь адрес и что сервер запущен')
-      : err.message;
-  } finally {
-    btn.disabled = false;
-  }
+  withBusy($('#authSubmit'), async () => {
+    loggedIn(await apiPost('/api/' + (registerMode ? 'register' : 'login'), { username: $('#authUser').value, password: $('#authPass').value }));
+  });
 };
+
+// --- код на почту: почта → код → (ник, если аккаунт новый)
+let codeStep = 1;
+function setCodeStep(n) {
+  codeStep = n;
+  $('#codeStep1').hidden = n !== 1;
+  $('#codeStep2').hidden = n !== 2;
+  $('#codeStep3').hidden = n !== 3;
+  $('#codeLinks').hidden = n !== 2;
+  $('#codeSubmit').textContent = n === 1 ? 'Получить код' : n === 2 ? 'Войти' : 'Создать аккаунт';
+  const focus = { 1: '#codeEmail', 2: '#codeValue', 3: '#codeNick' }[n];
+  if (!isTouch || n > 1) setTimeout(() => $(focus).focus(), 50);
+}
+async function sendCode() {
+  const email = $('#codeEmail').value.trim();
+  if (!email) throw new Error('Введи почту');
+  await apiPost('/api/email/send', { email });
+  $('#codeSentTo').textContent = `Код отправлен на ${email}. Проверь и папку «Спам».`;
+  $('#codeValue').value = '';
+  setCodeStep(2);
+}
+$('#codeForm').onsubmit = (e) => {
+  e.preventDefault();
+  withBusy($('#codeSubmit'), async () => {
+    if (codeStep === 1) return sendCode();
+    const body = { email: $('#codeEmail').value.trim(), code: $('#codeValue').value };
+    if (codeStep === 3) body.username = $('#codeNick').value.trim();
+    const d = await apiPost('/api/email/verify', body);
+    if (d.needUsername) {
+      $('#codeNick').value = body.email.split('@')[0].replace(/[^\p{L}\p{N}_.-]/gu, '').slice(0, 24);
+      return setCodeStep(3);
+    }
+    loggedIn(d);
+  });
+};
+$('#codeValue').addEventListener('input', (e) => {
+  e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+  if (e.target.value.length === 6) $('#codeForm').requestSubmit();
+});
+$('#codeBack').onclick = () => { authErr(''); setCodeStep(1); };
+$('#codeResend').onclick = () => withBusy($('#codeResend'), sendCode);
+
+// --- Google: вход идёт в системном браузере, обратно возвращаемся по одноразовому коду
+$('#googleBtn').onclick = () => withBusy($('#googleBtn'), async () => {
+  await ensureApi();
+  const url = API + '/auth/google' + (isNative ? '?app=1' : '');
+  const Browser = window.Capacitor?.Plugins?.Browser;
+  if (isNative && Browser) await Browser.open({ url, presentationStyle: 'popover' });
+  else location.href = url;
+});
+async function finishOAuth(code) {
+  if (!code) return;
+  showAuth();
+  authErr('Входим…');
+  try { loggedIn(await apiPost('/api/oauth/exchange', { code })); }
+  catch (err) { authErr(isNetErr(err) ? netMsg() : err.message); }
+}
+if (isNative && window.Capacitor?.Plugins?.App) {
+  const handleUrl = (url) => {
+    const m = /[?&]code=([a-f0-9]+)/.exec(url || '');
+    if (!m) return;
+    window.Capacitor.Plugins.Browser?.close().catch?.(() => {});
+    finishOAuth(m[1]);
+  };
+  window.Capacitor.Plugins.App.addListener('appUrlOpen', (e) => handleUrl(e.url));
+  window.Capacitor.Plugins.App.getLaunchUrl?.().then((r) => r && handleUrl(r.url)).catch(() => {});
+}
+
 function logout() {
   leaveVoice();
   store.set('token', null);
@@ -259,6 +364,7 @@ function connectSocket() {
 
 function onInit(d) {
   S.user = d.user;
+  S.me = d.me || {};
   S.servers = d.servers;
   S.online = new Set(d.online);
   S.voice = d.voice || {};
@@ -298,6 +404,13 @@ function bindSocket() {
     clearTimeout(m.get(user.id)?.timer);
     m.set(user.id, { name: user.username, timer: setTimeout(() => { m.delete(user.id); renderTyping(); }, 3500) });
     renderTyping();
+  });
+  socket.on('user:updated', (u) => {
+    if (u.id === S.user?.id) { S.user = u; renderUser(); }
+    for (const s of S.servers) s.members = s.members.map((m) => (m.id === u.id ? u : m));
+    for (const list of Object.values(S.msgs)) for (const m of list) if (m.author.id === u.id) m.author = u;
+    renderMembers();
+    if (curChannel()?.type === 'text') renderMessages();
   });
   socket.on('presence', ({ userId, online }) => {
     online ? S.online.add(userId) : S.online.delete(userId);
@@ -437,7 +550,7 @@ function renderVoicePanel() {
 }
 
 function renderUser() {
-  $('#userPanel').innerHTML = `${avatar(S.user, 'sm', true)}<span class="name">${esc(S.user.username)}</span>
+  $('#userPanel').innerHTML = `<button class="me" data-act="profile" title="Профиль">${avatar(S.user, 'sm', true)}<span class="name">${esc(S.user.username)}</span></button>
     <button class="icon-btn" data-act="logout" title="Выйти">${ICON.logout}</button>`;
 }
 
@@ -825,6 +938,23 @@ function modal(html, onMount) {
 }
 function closeModal() { const m = $('#modal'); m.hidden = true; m.innerHTML = ''; }
 
+function profileModal() {
+  const me = S.me || {};
+  const ways = [me.google && 'Google', me.email && 'код на почту', me.hasPassword && 'пароль'].filter(Boolean).join(', ') || 'пароль';
+  modal(`<div class="profile-head">${avatar(S.user, 'lg')}<div class="who"><b>${esc(S.user.username)}</b><small>${esc(me.email || 'почта не привязана')}</small></div></div>
+    <p class="muted">Вход: ${esc(ways)}</p>
+    <form id="fNick"><label>Ник<input id="pNick" value="${esc(S.user.username)}" maxlength="24" autocapitalize="off" spellcheck="false" required></label><button class="btn">Сохранить ник</button></form>
+    <form id="fPass"><label>${me.hasPassword ? 'Новый пароль' : 'Пароль для входа по нику'}<input id="pPass" type="password" minlength="6" autocomplete="new-password" required></label><button class="btn">${me.hasPassword ? 'Сменить пароль' : 'Задать пароль'}</button></form>
+    <button class="btn ghost" data-close>Закрыть</button>`, (m) => {
+    const save = (body, done) => socket.emit('profile:update', body, (res) => {
+      if (res?.error) return toast(res.error);
+      S.user = res.user; S.me = res.me; renderUser(); toast(done); closeModal();
+    });
+    m.querySelector('#fNick').onsubmit = (e) => { e.preventDefault(); save({ username: m.querySelector('#pNick').value }, 'Ник сохранён'); };
+    m.querySelector('#fPass').onsubmit = (e) => { e.preventDefault(); save({ password: m.querySelector('#pPass').value }, 'Пароль сохранён'); };
+  });
+}
+
 function addServerModal() {
   modal(`<h2>Сервер</h2>
     <form id="fCreate"><label>Создать свой<input id="fName" placeholder="Например: Пацаны" maxlength="40" required></label><button class="btn primary">Создать</button></form>
@@ -921,6 +1051,7 @@ const ACT = {
   screen: toggleScreen,
   leave: leaveVoice,
   logout: () => { if (confirm('Выйти из аккаунта?')) logout(); },
+  profile: profileModal,
   'del-channel': (el) => {
     if (!confirm('Удалить канал вместе с сообщениями?')) return;
     socket.emit('channel:delete', { channelId: el.dataset.id }, (res) => { if (res.error) toast(res.error); else serverMenu(); });
@@ -990,6 +1121,8 @@ if (isNative) document.body.classList.add('native');
 /* =================== старт =================== */
 if (innerWidth > 1100) document.body.classList.add('show-members');
 (async () => {
+  const hashLogin = /^#login=([a-f0-9]+)$/.exec(location.hash);
+  if (hashLogin) { history.replaceState(null, '', location.pathname); return finishOAuth(hashLogin[1]); }
   if (isNative && !API) await resolveServer();
   else if (isNative) resolveServer(); // проверим свежую ссылку в фоне
   if (S.token) start(); else showAuth();

@@ -105,33 +105,190 @@ app.get('/config.js', (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const NAME_RE = /^[\p{L}\p{N}_.\-]{2,24}$/u;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const GOOGLE_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const SMTP_ON = !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+const APP_SCHEME = 'ru.volna.messenger';
+app.set('trust proxy', true);
 
+const issue = (u) => ({ token: jwt.sign({ id: u.id }, SECRET, { expiresIn: '60d' }), user: pubUser(u) });
+const nameTaken = (n, exceptId) => db.data.users.some((u) => u.id !== exceptId && u.username.toLowerCase() === n.toLowerCase());
+const userByEmail = (e) => db.data.users.find((u) => u.email && u.email === e);
+function uniqueName(base) {
+  base = String(base || '').normalize('NFKC').replace(/[^\p{L}\p{N}_.\-]+/gu, '_').replace(/^[_.-]+|[_.-]+$/g, '').slice(0, 20);
+  if (base.length < 2) base = 'user';
+  let n = base, i = 1;
+  while (nameTaken(n)) n = `${base}_${++i}`;
+  return n;
+}
+function createUser({ username, hash = null, email = null, googleId = null }) {
+  const user = { id: uid(), username, hash, email, googleId, color: COLORS[crypto.randomInt(COLORS.length)], createdAt: Date.now() };
+  db.data.users.push(user);
+  db.save();
+  return user;
+}
+
+// какие способы входа включены на этом сервере
+app.get('/api/auth/options', (req, res) => res.json({ google: !!(GOOGLE_ID && GOOGLE_SECRET), email: SMTP_ON }));
+
+// ----- ник и пароль -----
 app.post('/api/register', async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
-  if (!NAME_RE.test(username)) return res.status(400).json({ error: 'Ник: 2–24 символа, буквы, цифры, _ . -' });
+  if (!NAME_RE.test(username)) return res.status(400).json({ error: 'Ник: 2–24 символа — буквы, цифры, _ . -' });
   if (password.length < 6) return res.status(400).json({ error: 'Пароль — минимум 6 символов' });
-  if (db.data.users.some((u) => u.username.toLowerCase() === username.toLowerCase()))
-    return res.status(409).json({ error: 'Такой ник уже занят' });
-  const user = {
-    id: uid(),
-    username,
-    hash: await bcrypt.hash(password, 10),
-    color: COLORS[crypto.randomInt(COLORS.length)],
-    createdAt: Date.now(),
-  };
-  db.data.users.push(user);
-  db.save();
-  res.json({ token: jwt.sign({ id: user.id }, SECRET, { expiresIn: '60d' }), user: pubUser(user) });
+  if (nameTaken(username)) return res.status(409).json({ error: 'Такой ник уже занят' });
+  const user = createUser({ username, hash: await bcrypt.hash(password, 10) });
+  res.json(issue(user));
 });
 
 app.post('/api/login', async (req, res) => {
-  const username = String(req.body?.username || '').trim().toLowerCase();
-  const user = db.data.users.find((u) => u.username.toLowerCase() === username);
+  const login = String(req.body?.username || '').trim().toLowerCase();
+  const user = db.data.users.find((u) => u.username.toLowerCase() === login || (u.email && u.email === login));
+  if (user && !user.hash) return res.status(401).json({ error: 'У этого аккаунта нет пароля — войди через Google или по коду на почту' });
   if (!user || !(await bcrypt.compare(String(req.body?.password || ''), user.hash)))
     return res.status(401).json({ error: 'Неверный ник или пароль' });
-  res.json({ token: jwt.sign({ id: user.id }, SECRET, { expiresIn: '60d' }), user: pubUser(user) });
+  res.json(issue(user));
 });
+
+// ----- код на почту -----
+const emailCodes = new Map(); // email -> { hash, exp, tries, sentAt }
+const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+let mailer = null;
+function getMailer() {
+  if (!mailer) {
+    const port = Number(process.env.SMTP_PORT) || 465;
+    mailer = require('nodemailer').createTransport({
+      host: process.env.SMTP_HOST,
+      port,
+      secure: port === 465,
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    });
+  }
+  return mailer;
+}
+
+app.post('/api/email/send', async (req, res) => {
+  if (!SMTP_ON) return res.status(503).json({ error: 'Вход по коду на этом сервере пока не включён' });
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Проверь адрес почты' });
+  const prev = emailCodes.get(email);
+  if (prev && Date.now() - prev.sentAt < 60e3) return res.status(429).json({ error: 'Новый код можно запросить через минуту' });
+  const code = String(crypto.randomInt(0, 1e6)).padStart(6, '0');
+  emailCodes.set(email, { hash: sha(email + code), exp: Date.now() + 10 * 60e3, tries: 0, sentAt: Date.now() });
+  try {
+    await getMailer().sendMail({
+      from: process.env.SMTP_FROM || `Волна <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: `${code} — код для входа в Волну`,
+      text: `Твой код для входа: ${code}\n\nОн действует 10 минут. Если ты не запрашивал код — просто проигнорируй письмо.`,
+      html: `<div style="font-family:system-ui,sans-serif;font-size:16px;color:#111">
+        <p>Твой код для входа в Волну:</p>
+        <p style="font-size:34px;font-weight:700;letter-spacing:6px;margin:12px 0">${code}</p>
+        <p style="color:#666">Код действует 10 минут. Если ты не запрашивал его — просто проигнорируй письмо.</p></div>`,
+    });
+  } catch (e) {
+    emailCodes.delete(email);
+    console.error('  ! Почта:', e.message);
+    return res.status(502).json({ error: 'Не удалось отправить письмо, попробуй позже' });
+  }
+  res.json({ ok: true, exists: !!userByEmail(email) });
+});
+
+app.post('/api/email/verify', (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const code = String(req.body?.code || '').replace(/\D/g, '');
+  const e = emailCodes.get(email);
+  if (!e || e.exp < Date.now()) return res.status(400).json({ error: 'Код устарел — запроси новый' });
+  if (e.tries >= 5) { emailCodes.delete(email); return res.status(429).json({ error: 'Слишком много попыток — запроси новый код' }); }
+  if (sha(email + code) !== e.hash) { e.tries++; return res.status(400).json({ error: 'Неверный код' }); }
+  let user = userByEmail(email);
+  if (!user) {
+    const username = String(req.body?.username || '').trim();
+    if (!username) return res.json({ needUsername: true });
+    if (!NAME_RE.test(username)) return res.status(400).json({ error: 'Ник: 2–24 символа — буквы, цифры, _ . -' });
+    if (nameTaken(username)) return res.status(409).json({ error: 'Такой ник уже занят' });
+    user = createUser({ username, email });
+  }
+  emailCodes.delete(email);
+  res.json(issue(user));
+});
+
+// ----- Google -----
+const oauthStates = new Map(); // state -> { app, exp }
+const loginCodes = new Map(); // одноразовый код -> { userId, exp }
+const baseUrl = (req) => HOSTED_URL || publicUrl || `${req.protocol}://${req.get('host')}`;
+const resultPage = (title, body, target) => `<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">${target ? `<meta http-equiv="refresh" content="0;url=${target}">` : ''}
+<title>${title}</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1a2e;color:#e8f4ff;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:24px}
+a{display:inline-block;margin-top:16px;padding:12px 22px;border-radius:999px;background:#63d8ff;color:#04202e;font-weight:700;text-decoration:none}</style></head>
+<body><div><h2>${title}</h2><p>${body}</p>${target ? `<a href="${target}">Вернуться в Волну</a><script>location.replace(${JSON.stringify(target)})</script>` : ''}</div></body></html>`;
+
+app.get('/auth/google', (req, res) => {
+  if (!GOOGLE_ID || !GOOGLE_SECRET) return res.status(503).send(resultPage('Вход через Google не включён', 'Владелец сервера ещё не подключил Google.'));
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, { app: req.query.app === '1', exp: Date.now() + 10 * 60e3 });
+  const q = new URLSearchParams({
+    client_id: GOOGLE_ID,
+    redirect_uri: baseUrl(req) + '/auth/google/callback',
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    prompt: 'select_account',
+  });
+  res.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + q);
+});
+
+app.get('/auth/google/callback', async (req, res) => {
+  const st = oauthStates.get(String(req.query.state || ''));
+  oauthStates.delete(String(req.query.state || ''));
+  if (!st || st.exp < Date.now() || !req.query.code) return res.status(400).send(resultPage('Ссылка устарела', 'Попробуй войти ещё раз.'));
+  try {
+    const r = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code: String(req.query.code),
+        client_id: GOOGLE_ID,
+        client_secret: GOOGLE_SECRET,
+        redirect_uri: baseUrl(req) + '/auth/google/callback',
+        grant_type: 'authorization_code',
+      }),
+    });
+    const t = await r.json();
+    if (!t.id_token) throw new Error(t.error_description || t.error || 'Google не вернул данные');
+    // id_token получен напрямую от Google по HTTPS — проверяем получателя и издателя
+    const p = JSON.parse(Buffer.from(t.id_token.split('.')[1], 'base64url').toString());
+    if (p.aud !== GOOGLE_ID || !['accounts.google.com', 'https://accounts.google.com'].includes(p.iss)) throw new Error('неверный ответ Google');
+    const email = p.email && p.email_verified ? String(p.email).toLowerCase() : null;
+    let user = db.data.users.find((u) => u.googleId === p.sub) || (email && userByEmail(email));
+    if (!user) user = createUser({ username: uniqueName(p.given_name || p.name || (email || '').split('@')[0]), email, googleId: p.sub });
+    else if (!user.googleId) { user.googleId = p.sub; if (!user.email && email) user.email = email; db.save(); }
+    const code = crypto.randomBytes(24).toString('hex');
+    loginCodes.set(code, { userId: user.id, exp: Date.now() + 2 * 60e3 });
+    const target = st.app ? `${APP_SCHEME}://auth?code=${code}` : `/#login=${code}`;
+    res.send(resultPage('Готово!', 'Возвращаемся в Волну…', target));
+  } catch (e) {
+    console.error('  ! Google:', e.message);
+    res.status(500).send(resultPage('Не получилось войти', 'Google не подтвердил вход. Попробуй ещё раз.'));
+  }
+});
+
+app.post('/api/oauth/exchange', (req, res) => {
+  const code = String(req.body?.code || '');
+  const c = loginCodes.get(code);
+  loginCodes.delete(code);
+  const user = c && c.exp > Date.now() && userById(c.userId);
+  if (!user) return res.status(401).json({ error: 'Вход устарел — попробуй ещё раз' });
+  res.json(issue(user));
+});
+
+// чистим просроченные коды
+setInterval(() => {
+  const now = Date.now();
+  for (const m of [emailCodes, oauthStates, loginCodes]) for (const [k, v] of m) if (v.exp < now) m.delete(k);
+}, 5 * 60e3).unref();
 
 // STUN/TURN для звонков. TURN задаётся переменными окружения (см. README).
 app.get('/api/config', (req, res) => {
@@ -241,10 +398,32 @@ io.on('connection', (socket) => {
     servers.forEach((s) => s.members.forEach((u) => ids.add(u.id)));
     reply(cb, {
       user: pubUser(me),
+      me: { email: me.email || null, hasPassword: !!me.hash, google: !!me.googleId },
       servers,
       online: [...ids].filter((id) => online.has(id)),
       voice: voiceSnapshot(servers),
     });
+  });
+
+  // ----- профиль -----
+  on('profile:update', async ({ username, password }, cb) => {
+    if (username !== undefined) {
+      username = String(username).trim();
+      if (!NAME_RE.test(username)) return reply(cb, { error: 'Ник: 2–24 символа — буквы, цифры, _ . -' });
+      if (nameTaken(username, me.id)) return reply(cb, { error: 'Такой ник уже занят' });
+      me.username = username;
+      for (const m of voice.values()) for (const st of m.values()) if (st.userId === me.id) st.username = username;
+    }
+    if (password !== undefined && password !== '') {
+      if (String(password).length < 6) return reply(cb, { error: 'Пароль — минимум 6 символов' });
+      me.hash = await bcrypt.hash(String(password), 10);
+    }
+    db.save();
+    const u = pubUser(me);
+    io.to('u:' + me.id).emit('user:updated', u);
+    for (const sid of myServerIds()) io.to('s:' + sid).emit('user:updated', u);
+    for (const [chId, m] of voice) if ([...m.values()].some((st) => st.userId === me.id)) broadcastVoice(chId);
+    reply(cb, { user: u, me: { email: me.email || null, hasPassword: !!me.hash, google: !!me.googleId } });
   });
 
   // ----- серверы -----

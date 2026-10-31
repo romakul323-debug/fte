@@ -292,7 +292,16 @@ setInterval(() => {
 
 // STUN/TURN для звонков. TURN задаётся переменными окружения (см. README).
 app.get('/api/config', (req, res) => {
-  const iceServers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  const iceServers = [];
+  // свой TURN (coturn с общим секретом): временные логины на сутки, без хранения паролей
+  if (process.env.TURN_SECRET && process.env.TURN_HOST) {
+    const h = process.env.TURN_HOST;
+    const username = `${Math.floor(Date.now() / 1000) + 24 * 3600}:volna`;
+    const credential = crypto.createHmac('sha1', process.env.TURN_SECRET).update(username).digest('base64');
+    iceServers.push({ urls: [`stun:${h}:3478`] });
+    iceServers.push({ urls: [`turn:${h}:3478?transport=udp`, `turn:${h}:3478?transport=tcp`], username, credential });
+  }
+  iceServers.push({ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] });
   if (process.env.TURN_URL) {
     iceServers.push({
       urls: process.env.TURN_URL.split(','),

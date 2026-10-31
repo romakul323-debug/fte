@@ -632,6 +632,9 @@ function renderTiles() {
       t.appendChild(vid);
       vid.play().catch(() => {});
     } else t.insertAdjacentHTML('beforeend', avatar(u, 'lg'));
+    const pst = inThis && u.socketId !== call.selfId ? peers.get(u.socketId)?.pc.connectionState : null;
+    if (pst === 'failed' || pst === 'disconnected') t.insertAdjacentHTML('beforeend', '<div class="tile-warn">нет связи</div>');
+    else if (pst === 'new' || pst === 'connecting') t.insertAdjacentHTML('beforeend', '<div class="tile-warn soft">соединяю…</div>');
     t.insertAdjacentHTML('beforeend', `<div class="tile-name">${u.deafened ? ICON.headOff : u.muted ? ICON.micOff : ''}<span>${esc(u.username)}${inThis && u.socketId === call.selfId ? ' (ты)' : ''}</span></div>`);
     box.appendChild(t);
   }
@@ -752,7 +755,10 @@ function ensurePeer(id) {
       if (S.channelId === call?.channelId) renderTiles();
     }
   };
-  pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') pc.restartIce?.(); };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed') pc.restartIce?.();
+    if (S.channelId === call?.channelId) renderTiles();
+  };
   return p;
 }
 

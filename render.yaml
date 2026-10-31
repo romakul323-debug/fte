@@ -1,9 +1,18 @@
-# Автодеплой на Render (бесплатный тариф). Данные хранятся в Postgres (Neon), адрес — в DATABASE_URL.
+# Автодеплой на Render (бесплатный тариф): сервер + база Postgres, подключаются друг к другу сами.
+# Бесплатная база Render живёт 30 дней — потом DATABASE_URL можно заменить на постоянную (например, Neon).
+databases:
+  - name: volna-db
+    plan: free
+    region: frankfurt
+    databaseName: volna
+    user: volna
+
 services:
   - type: web
     name: volna
     runtime: node
     plan: free
+    region: frankfurt
     branch: volna
     buildCommand: npm install --omit=dev --no-audit --no-fund
     startCommand: node server.js
@@ -15,4 +24,6 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: volna-db
+          property: connectionString

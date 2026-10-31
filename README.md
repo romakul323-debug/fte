@@ -40,8 +40,8 @@
 
 Чтобы сервер работал без твоего ПК:
 
-1. **База (Neon).** Зарегистрируйся на https://neon.com → Create project (регион Frankfurt) → скопируй *Connection string* (`postgresql://…`).
-2. **Сервер (Render).** Открой https://render.com/deploy?repo=https://github.com/romakul323-debug/fte/tree/volna → войди через GitHub → в поле `DATABASE_URL` вставь строку из Neon → **Deploy Blueprint**.
+1. **База.** Создаётся на Render автоматически (бесплатная, живёт 30 дней). Для постоянной: зарегистрируйся на https://neon.com, создай проект и замени в Render переменную `DATABASE_URL` на строку из Neon.
+2. **Сервер (Render).** Открой https://render.com/deploy?repo=https://github.com/romakul323-debug/fte/tree/volna → войди через GitHub → **Deploy Blueprint**.
 3. Через пару минут сервер будет по адресу вида `https://volna-xxxx.onrender.com`. Он сам опубликует свой адрес — приложения найдут его без ввода.
 
 Бесплатный Render засыпает после 15 минут тишины; сервер сам себя будит раз в 10 минут, чтобы этого не было (выключается переменной `KEEP_AWAKE=0`). Лимит — 750 часов в месяц, этого хватает на один сервер круглосуточно. Каждый push в ветку `volna` обновляет сервер автоматически.

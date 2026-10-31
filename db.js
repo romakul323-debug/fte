@@ -16,7 +16,11 @@ let pool = null;
 async function init() {
   if (DB_URL) {
     const { Pool } = require('pg');
-    pool = new Pool({ connectionString: DB_URL, ssl: /localhost|127\.0\.0\.1/.test(DB_URL) ? false : { rejectUnauthorized: false }, max: 2 });
+    // внутренние адреса (localhost, dpg-xxx у Render) — без SSL, внешние (Neon и т.п.) — с SSL
+    let host = '';
+    try { host = new URL(DB_URL).hostname; } catch {}
+    const noSsl = /sslmode=disable/.test(DB_URL) || !host.includes('.') || /^(localhost|127\.0\.0\.1)$/.test(host);
+    pool = new Pool({ connectionString: DB_URL, ssl: noSsl ? false : { rejectUnauthorized: false }, max: 2 });
     await pool.query('CREATE TABLE IF NOT EXISTS volna_state (id INT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ DEFAULT now())');
     const r = await pool.query('SELECT data FROM volna_state WHERE id = 1');
     if (r.rows[0]) Object.assign(data, r.rows[0].data);

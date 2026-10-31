@@ -383,7 +383,7 @@ function onInit(d) {
     const r = rejoin;
     rejoin = null;
     if (findChannel(r.channelId)) joinVoice(r.channelId, r).then(() => toast('Снова в голосовом канале'));
-    else nativeCall()?.stop().catch(() => {});
+    else { nativeCall()?.stop().catch(() => {}); keepAlive.stop(); }
   }
 }
 
@@ -677,7 +677,9 @@ document.addEventListener('visibilitychange', () => {
   // вернулись в приложение: телефон мог приостановить звук — запускаем снова
   if (call) {
     audioCtx?.resume?.();
+    keepAlive.resume();
     document.querySelectorAll('#audios audio').forEach((el) => el.play().catch(() => {}));
+    reviveMic();
   }
   if (socket && !socket.connected) socket.connect();
 });
@@ -715,6 +717,79 @@ $('#messages').addEventListener('click', (e) => {
 });
 
 /* =================== звонки (WebRTC, perfect negotiation) =================== */
+// Веб-версия: удерживаем звонок, когда страницу свернули.
+// Тихий звук по кругу + медиа-сессия = iOS/Android считают страницу «плеером» и не замораживают её.
+const keepAlive = (() => {
+  let el = null;
+  function silentWav() {
+    const n = 8000, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
+    const str = (o, t) => [...t].forEach((c, i) => (b[o + i] = c.charCodeAt(0)));
+    str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVEfmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+    str(36, 'data'); v.setUint32(40, n, true); b.fill(128, 44);
+    let bin = ''; for (const x of b) bin += String.fromCharCode(x);
+    return 'data:audio/wav;base64,' + btoa(bin);
+  }
+  return {
+    start(title) {
+      if (isNative) return; // в приложениях это делает «служба звонка»
+      try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch {}
+      try {
+        if (!el) {
+          el = new Audio(silentWav());
+          el.loop = true;
+          el.setAttribute('playsinline', '');
+          document.body.appendChild(el);
+        }
+        el.play().catch(() => {});
+      } catch {}
+      const ms = navigator.mediaSession;
+      if (ms) {
+        try {
+          ms.metadata = new MediaMetadata({ title: title || 'Голосовой канал', artist: 'Волна — вы в звонке', artwork: [{ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }] });
+          ms.playbackState = 'playing';
+        } catch {}
+        // кнопки на экране блокировки: пауза не должна обрывать звонок
+        for (const [a, fn] of [['pause', () => el?.play().catch(() => {})], ['play', () => el?.play().catch(() => {})], ['hangup', () => leaveVoice()], ['togglemicrophone', () => toggleMute()]])
+          try { ms.setActionHandler(a, fn); } catch {}
+      }
+    },
+    stop() {
+      if (isNative) return;
+      try { el?.pause(); } catch {}
+      const ms = navigator.mediaSession;
+      if (ms) { try { ms.metadata = null; ms.playbackState = 'none'; } catch {} }
+      try { if (navigator.audioSession) navigator.audioSession.type = 'auto'; } catch {}
+    },
+    resume() { if (!isNative && el) el.play().catch(() => {}); },
+  };
+})();
+
+// Если система выключила микрофон, пока страница была свёрнута, — берём его заново
+async function reviveMic() {
+  if (!call?.stream) return;
+  const old = call.stream.getAudioTracks()[0];
+  if (old && old.readyState === 'live') return;
+  const me = call;
+  let fresh;
+  try {
+    fresh = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch { return; }
+  if (call !== me) { fresh.getTracks().forEach((t) => t.stop()); return; }
+  const track = fresh.getAudioTracks()[0];
+  track.enabled = !me.muted;
+  if (old) me.stream.removeTrack(old);
+  me.stream.addTrack(track);
+  for (const p of peers.values()) p.audioSender?.replaceTrack(track).catch(() => {});
+  addMeter(me.selfId, me.stream);
+  if (me.capture && audioCtx) {
+    try { me.captureSrc?.disconnect(); } catch {}
+    me.captureSrc = audioCtx.createMediaStreamSource(me.stream);
+    me.captureSrc.connect(me.capture);
+  }
+}
+
 // «служба звонка» в Android-приложении: не даёт системе заморозить звук и микрофон в фоне
 let nativeCallPlugin;
 const nativeCall = () => {
@@ -732,7 +807,8 @@ async function joinVoice(chId, opts = {}) {
   if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia)
     return toast('Звонки работают только по HTTPS (или на localhost)');
   const me = (call = { channelId: chId, selfId: socket.id, stream: null, muted: !!opts.muted, deafened: !!opts.deafened, prevMuted: false, video: false, screen: false, videoTrack: null, localVideo: null });
-  // AudioContext создаём сразу в обработчике клика — иначе iOS его не запустит
+  // AudioContext и фоновое удержание запускаем сразу в обработчике клика — иначе iOS не разрешит
+  keepAlive.start(findChannel(chId)?.name);
   try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch {}
   try {
     me.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
@@ -774,7 +850,7 @@ function ensurePeer(id) {
   p.videoEl.setAttribute('playsinline', '');
   peers.set(id, p);
 
-  if (call?.stream) for (const t of call.stream.getAudioTracks()) pc.addTrack(t, call.stream);
+  if (call?.stream) for (const t of call.stream.getAudioTracks()) p.audioSender = pc.addTrack(t, call.stream);
   if (call?.videoTrack) p.videoSender = pc.addTrack(call.videoTrack);
 
   pc.onnegotiationneeded = async () => {
@@ -844,7 +920,7 @@ function leaveVoice() {
 
 function cleanupCall(keepService) {
   if (!call) return;
-  if (!keepService) nativeCall()?.stop().catch(() => {});
+  if (!keepService) { nativeCall()?.stop().catch(() => {}); keepAlive.stop(); }
   for (const id of [...peers.keys()]) closePeer(id);
   call.stream?.getTracks().forEach((t) => t.stop());
   call.videoTrack?.stop();

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Волна</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { display: grid; place-items: center; padding: 24px; color: #eef6ff; text-align: center;
+    font: 16px/1.5 -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background: radial-gradient(40% 35% at 15% 20%, rgba(33,92,230,.75), transparent 70%),
+      radial-gradient(45% 40% at 75% 85%, rgba(16,196,214,.55), transparent 70%), #061322; }
+  .card { max-width: 340px; padding: 28px 24px; border-radius: 28px; border: 1px solid rgba(255,255,255,.14);
+    background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04));
+    -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); box-shadow: inset 0 1px 0 rgba(255,255,255,.25); }
+  h1 { margin: 0 0 8px; font-size: 22px; }
+  p { margin: 0 0 20px; color: rgba(224,238,255,.65); }
+  button { font: inherit; font-weight: 650; padding: 12px 26px; border-radius: 999px; border: 1px solid rgba(255,255,255,.5);
+    color: #032433; background: linear-gradient(180deg, #a6efff, #4cc8f2); }
+</style>
+<script src="offline-config.js"></script>
+</head>
+<body>
+  <div class="card">
+    <h1>Сервер сейчас не в сети</h1>
+    <p>Скорее всего, компьютер с сервером выключен. Как только его запустят, всё заработает.</p>
+    <button id="retry">Повторить</button>
+  </div>
+  <script>
+    const go = () => { if (window.VOLNA_SERVER) location.href = window.VOLNA_SERVER; else location.reload(); };
+    document.getElementById('retry').onclick = go;
+    setTimeout(go, 15000);
+  </script>
+</body>
+</html>

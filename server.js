@@ -617,6 +617,13 @@ io.on('connection', (socket) => {
     broadcastVoice(chId);
   });
 
+  // запасной путь для голоса: кусочки звука пересылаются остальным в канале
+  socket.on('voice:audio', (data) => {
+    const chId = voiceOf.get(socket.id);
+    if (!chId || !data || data.byteLength > 4096) return;
+    socket.volatile.to('v:' + chId).emit('voice:audio', { from: socket.id, data });
+  });
+
   // пересылка WebRTC-сигналов только между участниками одного канала
   on('voice:signal', ({ to, data }) => {
     const chId = voiceOf.get(socket.id);
@@ -714,30 +721,98 @@ async function announce(url) {
   }
 }
 
+// ---------- Tuna (российский туннель, бесплатный постоянный адрес, работает без VPN) ----------
+const TUNA_FILE = path.join(db.DIR, 'tuna.json');
+function tunaConfig() {
+  if (process.env.TUNA_API_KEY) return { apiKey: process.env.TUNA_API_KEY, subdomain: process.env.TUNA_SUBDOMAIN || '' };
+  try { return JSON.parse(fs.readFileSync(TUNA_FILE, 'utf8')); } catch { return null; }
+}
+function ask(q) {
+  return new Promise((resolve) => {
+    const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(q, (a) => { rl.close(); resolve(a.trim()); });
+  });
+}
+async function setupTuna() {
+  let cfg = tunaConfig();
+  if (cfg || !process.stdin.isTTY) return cfg;
+  console.log('\n  Постоянный адрес без VPN даёт Tuna (tuna.am), бесплатно.');
+  console.log('  1) Зарегистрируйся на https://tuna.am  2) скопируй API-ключ (начинается с tak_)');
+  console.log('  3) скопируй имя бесплатного постоянного поддомена из личного кабинета.\n');
+  const apiKey = await ask('  API-ключ Tuna (Enter — пропустить и взять временный туннель Cloudflare): ');
+  if (!apiKey) { fs.writeFileSync(TUNA_FILE, JSON.stringify({ skip: true })); return null; }
+  const subdomain = (await ask('  Постоянный поддомен (Enter — без него, адрес будет меняться): ')).replace(/\..*$/, '');
+  cfg = { apiKey, subdomain };
+  fs.writeFileSync(TUNA_FILE, JSON.stringify(cfg));
+  console.log('  Сохранено в data/tuna.json\n');
+  return cfg;
+}
+async function tunaBin() {
+  const exe = process.platform === 'win32' ? 'tuna.exe' : 'tuna';
+  const local = path.join(__dirname, 'tools', exe);
+  if (fs.existsSync(local)) return local;
+  if (spawnSync(process.platform === 'win32' ? 'where' : 'which', ['tuna']).status === 0) return 'tuna';
+  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const dir = path.join(__dirname, 'tools');
+  fs.mkdirSync(dir, { recursive: true });
+  console.log('  Скачиваю Tuna (один раз)…');
+  if (process.platform === 'win32') {
+    const zip = path.join(dir, 'tuna.zip');
+    await download(`https://releases.tuna.am/tuna/latest/tuna_windows_${arch}.zip`, zip);
+    const r = spawnSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -Force -Path '${zip}' -DestinationPath '${dir}'`], { stdio: 'inherit' });
+    fs.rmSync(zip, { force: true });
+    if (r.status !== 0) throw new Error('не удалось распаковать Tuna');
+  } else if (process.platform === 'linux') {
+    const tgz = path.join(dir, 'tuna.tgz');
+    await download(`https://releases.tuna.am/tuna/latest/tuna_linux_${arch}.tar.gz`, tgz);
+    spawnSync('tar', ['-xzf', tgz, '-C', dir], { stdio: 'inherit' });
+    fs.rmSync(tgz, { force: true });
+    fs.chmodSync(local, 0o755);
+  } else throw new Error('установи Tuna вручную: https://tuna.am');
+  if (!fs.existsSync(local)) throw new Error('Tuna не нашёлся после распаковки');
+  return local;
+}
+
 let tunnelProc = null;
 async function startTunnel() {
-  let bin;
-  try { bin = await cloudflaredBin(); } catch (e) { console.log('  ! Туннель не запущен:', e.message); return; }
+  // что запускаем: Tuna (если настроен) или временный туннель Cloudflare
+  let t = null;
+  const tuna = await setupTuna();
+  if (tuna && tuna.apiKey) {
+    try {
+      const bin = await tunaBin();
+      const args = ['http', String(PORT)];
+      if (tuna.subdomain) args.push(`--subdomain=${tuna.subdomain}`);
+      t = { name: 'Tuna', bin, args, env: { ...process.env, TUNA_API_KEY: tuna.apiKey }, re: /https:\/\/[a-z0-9-]+\.(?:[a-z]{2}\.)?tuna\.am/ };
+    } catch (e) {
+      console.log('  ! Tuna не запустился:', e.message, '— беру Cloudflare');
+    }
+  }
+  if (!t) {
+    try {
+      const bin = await cloudflaredBin();
+      t = { name: 'Cloudflare', bin, args: ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], env: process.env, re: /https:\/\/(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com/ };
+    } catch (e) { console.log('  ! Туннель не запущен:', e.message); return; }
+  }
   let fails = 0;
   const run = () => {
-    console.log('  Поднимаю туннель в интернет…');
-    const p = spawn(bin, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    console.log(`  Поднимаю туннель в интернет (${t.name})…`);
+    const p = spawn(t.bin, t.args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: t.env });
     tunnelProc = p;
     let found = false;
     const onData = (buf) => {
-      const m = String(buf).match(/https:\/\/(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com/);
+      const m = String(buf).match(t.re);
       if (!m || found) return;
       found = true;
       fails = 0;
       publicUrl = m[0];
       console.log(`\n  ✅ Сервер доступен из интернета: ${publicUrl}`);
-      console.log('     Приложения на телефонах подключатся сами. Не закрывай это окно.\n');
-      // ссылке нужно несколько секунд, чтобы заработать — публикуем чуть позже
+      console.log('     Не закрывай это окно — пока оно открыто, Волна работает.\n');
       setTimeout(() => announce(publicUrl), 4000);
     };
     p.stdout.on('data', onData);
     p.stderr.on('data', onData);
-    p.on('error', (e) => console.log('  ! cloudflared:', e.message));
+    p.on('error', (e) => console.log(`  ! ${t.name}:`, e.message));
     p.on('exit', (code) => {
       if (tunnelProc !== p) return;
       publicUrl = null;
@@ -747,7 +822,6 @@ async function startTunnel() {
     });
   };
   run();
-  // напоминаем адрес, чтобы он не пропал из кэша
   setInterval(() => { if (publicUrl) announce(publicUrl); }, 20 * 60 * 1000);
 }
 

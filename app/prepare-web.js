@@ -16,4 +16,13 @@ fs.writeFileSync(
     `window.VOLNA_DISCOVERY = ${JSON.stringify(cfg.discovery || '')};\n` +
     `window.VOLNA_ANDROID = ${JSON.stringify(cfg.android || '')};\n`
 );
+// Если адрес сервера известен — приложение открывает сайт сервера напрямую:
+// обновления интерфейса приходят без пересборки, а при выключенном сервере показывается offline.html.
+const capPath = path.join(__dirname, 'capacitor.config.json');
+const cap = JSON.parse(fs.readFileSync(capPath, 'utf8'));
+if (server) cap.server = { url: server, errorPath: 'offline.html' };
+else delete cap.server;
+fs.writeFileSync(capPath, JSON.stringify(cap, null, 2) + '\n');
+fs.copyFileSync(path.join(__dirname, 'offline.html'), path.join(dst, 'offline.html'));
+fs.writeFileSync(path.join(dst, 'offline-config.js'), `window.VOLNA_SERVER = ${JSON.stringify(server)};\n`);
 console.log('www готов' + (server ? `, сервер по умолчанию: ${server}` : ''));

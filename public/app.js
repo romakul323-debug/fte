@@ -10,6 +10,8 @@ const store = {
 const isTouch = matchMedia('(pointer: coarse)').matches;
 // В приложении (Android/iOS) страница лежит внутри APK, поэтому адрес сервера вводится вручную
 const isNative = !!(window.Capacitor && (window.Capacitor.isNativePlatform ? window.Capacitor.isNativePlatform() : true));
+// приложение может открывать сайт сервера напрямую (тогда сервер — тот же адрес) или свою копию страницы (тогда адрес нужен)
+const isShell = isNative && location.hostname === 'localhost';
 const normUrl = (u) => {
   u = String(u || '').trim().replace(/\/+$/, '');
   if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u;
@@ -17,8 +19,8 @@ const normUrl = (u) => {
 };
 const FIXED = normUrl(window.VOLNA_SERVER || '');            // адрес, вшитый в сборку (если есть)
 const DISCOVERY = window.VOLNA_DISCOVERY || '';               // откуда приложение узнаёт текущий адрес сервера
-let API = isNative ? FIXED || normUrl(store.get('serverUrl') || '') : '';
-const isManual = () => isNative && store.get('serverManual') === '1';
+let API = isShell ? FIXED || normUrl(store.get('serverUrl') || '') : '';
+const isManual = () => isShell && store.get('serverManual') === '1';
 
 async function fetchT(url, opts = {}, ms = 6000) {
   const c = new AbortController();
@@ -42,7 +44,7 @@ async function discover() {
   } catch { return null; }
 }
 async function resolveServer() {
-  if (!isNative || FIXED || isManual()) return API;
+  if (!isShell || FIXED || isManual()) return API;
   const found = await discover();
   if (found) { API = found; store.set('serverUrl', found); }
   return API;
@@ -135,7 +137,7 @@ const authErr = (t) => { $('#authError').textContent = t || ''; };
 function showAuth(err) {
   $('#app').hidden = true;
   $('#auth').hidden = false;
-  if (isNative) {
+  if (isShell) {
     // поле адреса показываем, только если сервер не нашёлся сам или пользователь задал свой
     const showField = !FIXED && (isManual() || !DISCOVERY || !API);
     $('#serverField').hidden = !showField;
@@ -147,7 +149,7 @@ function showAuth(err) {
   loadAuthOptions();
 }
 async function loadAuthOptions() {
-  if (isNative && !API) return;
+  if (isShell && !API) return;
   try {
     authOpts = await (await fetchT(API + '/api/auth/options', {}, 15000)).json();
   } catch { authOpts = { google: false, email: false }; }
@@ -179,15 +181,15 @@ $('#authServer').addEventListener('change', () => {
 
 const isNetErr = (err) => err instanceof TypeError || err?.name === 'AbortError' || /fetch|load failed|network|abort/i.test(err?.message || '');
 async function ensureApi() {
-  if (isNative && !$('#serverField').hidden) {
+  if (isShell && !$('#serverField').hidden) {
     API = normUrl($('#authServer').value);
     if (!API) throw new Error('Укажи адрес сервера');
     store.set('serverUrl', API);
     store.set('serverManual', '1');
-  } else if (isNative && !API) {
+  } else if (isShell && !API) {
     await resolveServer();
   }
-  if (isNative && !API) throw new Error('Сервер сейчас выключен. Попроси владельца запустить его.');
+  if (isShell && !API) throw new Error('Сервер сейчас выключен. Попроси владельца запустить его.');
 }
 // POST к серверу; если ссылка сервера сменилась — находим новую и повторяем
 async function apiPost(path, body) {
@@ -201,14 +203,14 @@ async function apiPost(path, body) {
   };
   try { return await once(); }
   catch (err) {
-    if (!isNetErr(err) || !isNative || FIXED || isManual()) throw err;
+    if (!isNetErr(err) || !isShell || FIXED || isManual()) throw err;
     const old = API;
     await resolveServer();
     if (API === old) throw err;
     return once();
   }
 }
-const netMsg = () => isNative && !isManual() ? 'Сервер сейчас не в сети — попробуй через минуту.' : 'Сервер недоступен — проверь адрес и что сервер запущен';
+const netMsg = () => isShell && !isManual() ? 'Сервер сейчас не в сети — попробуй через минуту.' : 'Сервер недоступен — проверь адрес и что сервер запущен';
 function loggedIn(d) {
   S.token = d.token;
   store.set('token', d.token);
@@ -293,7 +295,7 @@ $('#codeResend').onclick = () => withBusy($('#codeResend'), sendCode);
 // --- Google: вход идёт в системном браузере, обратно возвращаемся по одноразовому коду
 $('#googleBtn').onclick = () => withBusy($('#googleBtn'), async () => {
   await ensureApi();
-  const url = API + '/auth/google' + (isNative ? '?app=1' : '');
+  const url = (API || location.origin) + '/auth/google' + (isNative ? '?app=1' : '');
   const Browser = window.Capacitor?.Plugins?.Browser;
   if (isNative && Browser) await Browser.open({ url, presentationStyle: 'popover' });
   else location.href = url;
@@ -345,7 +347,7 @@ function connectSocket() {
     fails++;
     setNet(false, everConnected ? null : 'Подключаюсь к серверу…');
     // каждые несколько неудач проверяем, не сменилась ли ссылка сервера
-    if (fails % 3 === 1 && isNative && !FIXED && !isManual() && !rediscovering) {
+    if (fails % 3 === 1 && isShell && !FIXED && !isManual() && !rediscovering) {
       rediscovering = true;
       const old = API;
       await resolveServer();
@@ -450,6 +452,7 @@ function bindSocket() {
   socket.on('voice:peer-joined', (st) => { if (call) ensurePeer(st.socketId); });
   socket.on('voice:peer-left', ({ socketId }) => closePeer(socketId));
   socket.on('voice:signal', ({ from, data }) => { if (call) onSignal(from, data); });
+  socket.on('voice:audio', ({ from, data }) => { if (call) playRelay(from, data); });
   socket.on('voice:kicked', () => { cleanupCall(); toast('Ты отключён от голосового канала'); });
 }
 
@@ -633,7 +636,9 @@ function renderTiles() {
       vid.play().catch(() => {});
     } else t.insertAdjacentHTML('beforeend', avatar(u, 'lg'));
     const pst = inThis && u.socketId !== call.selfId ? peers.get(u.socketId)?.pc.connectionState : null;
-    if (pst === 'failed' || pst === 'disconnected') t.insertAdjacentHTML('beforeend', '<div class="tile-warn">нет связи</div>');
+    const relayed = inThis && peers.get(u.socketId)?.relay;
+    if (relayed) t.insertAdjacentHTML('beforeend', '<div class="tile-warn soft">через сервер</div>');
+    else if (pst === 'failed' || pst === 'disconnected') t.insertAdjacentHTML('beforeend', '<div class="tile-warn">нет связи</div>');
     else if (pst === 'new' || pst === 'connecting') t.insertAdjacentHTML('beforeend', '<div class="tile-warn soft">соединяю…</div>');
     t.insertAdjacentHTML('beforeend', `<div class="tile-name">${u.deafened ? ICON.headOff : u.muted ? ICON.micOff : ''}<span>${esc(u.username)}${inThis && u.socketId === call.selfId ? ' (ты)' : ''}</span></div>`);
     box.appendChild(t);
@@ -710,6 +715,7 @@ async function joinVoice(chId) {
     if (res?.error) { toast(res.error); cleanupCall(); return; }
     me.selfId = socket.id;
     if (me.stream) addMeter(me.selfId, me.stream);
+    startRelay(me);
     for (const p of res.peers) ensurePeer(p.socketId);
     renderSidebar();
     renderMain();
@@ -722,7 +728,7 @@ function signal(to, data) { socket.emit('voice:signal', { to, data }); }
 function ensurePeer(id) {
   if (peers.has(id)) return peers.get(id);
   const pc = new RTCPeerConnection({ iceServers: S.ice });
-  const p = { id, pc, polite: socket.id < id, makingOffer: false, ignoreOffer: false, videoSender: null, audioEl: document.createElement('audio'), videoEl: document.createElement('video') };
+  const p = { id, pc, created: Date.now(), relay: false, polite: socket.id < id, makingOffer: false, ignoreOffer: false, videoSender: null, audioEl: document.createElement('audio'), videoEl: document.createElement('video') };
   p.audioEl.autoplay = true;
   p.audioEl.setAttribute('playsinline', '');
   p.audioEl.muted = !!call?.deafened;
@@ -790,6 +796,7 @@ function closePeer(id) {
   p.videoEl.srcObject = null;
   p.videoEl.remove();
   removeMeter(id);
+  try { p.player?.disconnect(); p.relayGain?.disconnect(); } catch {}
   peers.delete(id);
 }
 
@@ -804,6 +811,8 @@ function cleanupCall() {
   for (const id of [...peers.keys()]) closePeer(id);
   call.stream?.getTracks().forEach((t) => t.stop());
   call.videoTrack?.stop();
+  clearInterval(call.relayTimer);
+  try { call.capture?.disconnect(); call.captureSrc?.disconnect(); } catch {}
   removeMeter(call.selfId);
   call = null;
   $('#unlock')?.remove();
@@ -813,6 +822,7 @@ function cleanupCall() {
 
 function pushVoiceState() {
   if (!call) return;
+  call.capture?.port.postMessage({ on: !call.muted });
   socket.emit('voice:update', { muted: call.muted, deafened: call.deafened, video: call.video, screen: call.screen });
   renderVoicePanel();
   if (S.channelId === call.channelId) renderTiles();
@@ -829,7 +839,12 @@ function toggleMute() {
   pushVoiceState();
 }
 
-function applyDeafen() { for (const p of peers.values()) p.audioEl.muted = call.deafened; }
+function applyDeafen() {
+  for (const p of peers.values()) {
+    p.audioEl.muted = call.deafened;
+    if (p.relayGain) p.relayGain.gain.value = call.deafened ? 0 : 1;
+  }
+}
 
 function toggleDeafen() {
   if (!call) return;
@@ -884,12 +899,55 @@ function setVideo(track, isScreen) {
   pushVoiceState();
 }
 
+/* запасной путь для голоса — через сервер, когда напрямую не соединилось */
+async function startRelay(me) {
+  if (!audioCtx?.audioWorklet) return;
+  try {
+    if (!audioCtx.__relayLoaded) { await audioCtx.audioWorklet.addModule('relay-worklet.js'); audioCtx.__relayLoaded = true; }
+  } catch (e) { console.warn('relay worklet', e); return; }
+  if (call !== me) return;
+  if (me.stream) {
+    me.captureSrc = audioCtx.createMediaStreamSource(me.stream);
+    me.capture = new AudioWorkletNode(audioCtx, 'volna-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    const sink = audioCtx.createGain();
+    sink.gain.value = 0;
+    me.captureSrc.connect(me.capture).connect(sink).connect(audioCtx.destination);
+    me.capture.port.postMessage({ on: !me.muted });
+    me.capture.port.onmessage = (e) => { if (call === me && me.relaySend && !me.muted) socket.volatile.emit('voice:audio', e.data); };
+  }
+  // раз в секунду решаем, с кем говорим через сервер: всё, что не соединилось напрямую за 5 секунд
+  me.relayTimer = setInterval(() => {
+    if (call !== me) return;
+    let changed = false;
+    for (const p of peers.values()) {
+      const ok = p.pc.connectionState === 'connected';
+      const want = !ok && Date.now() - p.created > 5000;
+      if (want !== p.relay) { p.relay = want; changed = true; }
+    }
+    me.relaySend = [...peers.values()].some((p) => p.relay);
+    if (changed && S.channelId === me.channelId) renderTiles();
+  }, 1000);
+}
+function playRelay(from, data) {
+  const p = peers.get(from);
+  if (!p || !p.relay || !audioCtx?.__relayLoaded) return;
+  if (!p.player) {
+    p.player = new AudioWorkletNode(audioCtx, 'volna-player', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+    p.relayGain = audioCtx.createGain();
+    p.relayGain.gain.value = call.deafened ? 0 : 1;
+    p.player.connect(p.relayGain).connect(audioCtx.destination);
+    addMeter(from, p.player);
+    audioCtx.resume?.();
+  }
+  p.player.port.postMessage(data, [data]);
+}
+
 /* индикатор «говорит» */
 function addMeter(id, stream) {
   if (!audioCtx || !id) return;
   removeMeter(id);
   try {
-    const src = audioCtx.createMediaStreamSource(stream);
+    const src = stream instanceof AudioNode ? stream : audioCtx.createMediaStreamSource(stream);
     const an = audioCtx.createAnalyser();
     an.fftSize = 512;
     src.connect(an);
@@ -1107,7 +1165,7 @@ function closeDrawer() { document.body.classList.remove('drawer'); }
 $('#menuBtn').onclick = () => document.body.classList.toggle('drawer');
 $('#membersBtn').onclick = () => document.body.classList.toggle('show-members');
 $('#netChange').onclick = () => { store.set('token', null); store.set('serverManual', '1'); location.reload(); };
-$('#netChange').hidden = !isNative || !!FIXED;
+$('#netChange').hidden = !isShell || !!FIXED;
 $('#scrim').onclick = () => document.body.classList.remove('drawer', 'show-members');
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeModal(); document.body.classList.remove('drawer'); }
@@ -1129,7 +1187,7 @@ if (innerWidth > 1100) document.body.classList.add('show-members');
 (async () => {
   const hashLogin = /^#login=([a-f0-9]+)$/.exec(location.hash);
   if (hashLogin) { history.replaceState(null, '', location.pathname); return finishOAuth(hashLogin[1]); }
-  if (isNative && !API) await resolveServer();
-  else if (isNative) resolveServer(); // проверим свежую ссылку в фоне
+  if (isShell && !API) await resolveServer();
+  else if (isShell) resolveServer(); // проверим свежую ссылку в фоне
   if (S.token) start(); else showAuth();
 })();

@@ -1,0 +1,18 @@
+# Автодеплой на Render (бесплатный тариф). Данные хранятся в Postgres (Neon), адрес — в DATABASE_URL.
+services:
+  - type: web
+    name: volna
+    runtime: node
+    plan: free
+    branch: volna
+    buildCommand: npm install --omit=dev --no-audit --no-fund
+    startCommand: node server.js
+    healthCheckPath: /api/config
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false

@@ -21,14 +21,16 @@ let publicUrl = null;
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_VOICE = 10; // звонки идут напрямую между участниками (mesh), больше 10 тяжело
-const SECRET = process.env.JWT_SECRET || loadSecret();
+let SECRET = null; // ключ подписи входа; берётся из JWT_SECRET или хранится в базе
 
 function loadSecret() {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  // старый вариант хранения — файл data/secret.txt
   const file = path.join(db.DIR, 'secret.txt');
-  if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
-  const s = crypto.randomBytes(32).toString('hex');
-  fs.writeFileSync(file, s);
-  return s;
+  if (!db.data.secret && fs.existsSync(file)) db.data.secret = fs.readFileSync(file, 'utf8').trim();
+  if (!db.data.secret) db.data.secret = crypto.randomBytes(32).toString('hex');
+  db.save();
+  return db.data.secret;
 }
 
 // ---------- helpers ----------
@@ -444,14 +446,40 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`\n  Волна запущена: http://localhost:${PORT}`);
-  for (const list of Object.values(os.networkInterfaces()))
-    for (const a of list || [])
-      if (a.family === 'IPv4' && !a.internal) console.log(`  В локальной сети: http://${a.address}:${PORT}`);
-  if (TUNNEL) startTunnel();
-  else console.log('  (для доступа из интернета запусти с --tunnel или через start.bat)\n');
-});
+// адрес сервера на хостинге (Render подставляет RENDER_EXTERNAL_URL сам)
+const HOSTED_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+
+db.init()
+  .then(() => {
+    SECRET = loadSecret();
+    server.listen(PORT, () => {
+      console.log(`\n  Волна запущена: http://localhost:${PORT}`);
+      if (HOSTED_URL) return startHosted();
+      for (const list of Object.values(os.networkInterfaces()))
+        for (const a of list || [])
+          if (a.family === 'IPv4' && !a.internal) console.log(`  В локальной сети: http://${a.address}:${PORT}`);
+      if (TUNNEL) startTunnel();
+      else console.log('  (для доступа из интернета запусти с --tunnel или через start.bat)\n');
+    });
+  })
+  .catch((e) => {
+    console.error('  ! Не удалось открыть базу данных:', e.message);
+    process.exit(1);
+  });
+
+// ---------- режим хостинга ----------
+function startHosted() {
+  publicUrl = HOSTED_URL;
+  console.log(`  Публичный адрес: ${publicUrl}`);
+  setTimeout(() => announce(publicUrl), 3000);
+  setInterval(() => announce(publicUrl), 20 * 60 * 1000);
+  // бесплатный Render засыпает через 15 минут тишины — не даём ему уснуть
+  if (process.env.KEEP_AWAKE !== '0') {
+    setInterval(() => {
+      fetch(publicUrl + '/api/config').catch(() => {});
+    }, 10 * 60 * 1000);
+  }
+}
 
 // ---------- туннель в интернет (Cloudflare Quick Tunnel) ----------
 function download(url, dest, redirects = 8) {
@@ -536,10 +564,10 @@ async function startTunnel() {
 }
 
 for (const sig of ['SIGINT', 'SIGTERM'])
-  process.on(sig, () => {
-    db.flush();
+  process.on(sig, async () => {
     const p = tunnelProc;
     tunnelProc = null;
     p?.kill();
+    try { await Promise.race([db.flush(), new Promise((r) => setTimeout(r, 5000))]); } catch {}
     process.exit(0);
   });

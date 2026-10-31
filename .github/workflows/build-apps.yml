@@ -1,0 +1,124 @@
+name: Сборка APK и iOS
+
+on:
+  push:
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+    inputs:
+      server:
+        description: 'Адрес сервера по умолчанию, вшивается в приложение (можно оставить пустым)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apps-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VOLNA_SERVER: ${{ inputs.server || vars.VOLNA_SERVER }}
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Веб-часть → Android
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          node prepare-web.js
+          npx cap sync android
+      - name: Сборка APK
+        working-directory: app/android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+      - run: |
+          mkdir -p dist
+          cp app/android/app/build/outputs/apk/release/app-release.apk dist/Volna.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/Volna.apk
+
+  ios:
+    name: iOS (IPA без подписи)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Самый новый Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Использую $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Веб-часть → iOS
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          node prepare-web.js
+          npx cap sync ios
+      - name: Сборка
+        working-directory: app/ios/App
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive | tail -n 60
+          test -d "$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app"
+      - name: Упаковка IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R "$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app" dist/Payload/
+          cd dist && zip -qry Volna-unsigned.ipa Payload && rm -rf Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: dist/Volna-unsigned.ipa
+
+  release:
+    name: Публикация
+    needs: [android, ios]
+    if: always() && needs.android.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -la dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: volna-build-${{ github.run_number }}
+          name: Волна, сборка ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          body: |
+            **Android:** скачай `Volna.apk` и установи (разреши установку из неизвестных источников).
+            **iPhone:** `Volna-unsigned.ipa` ставится через Sideloadly с ПК со своим Apple ID.
+          files: dist/*

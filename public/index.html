@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#1e1f22">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Волна">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+<title>Волна</title>
+</head>
+<body>
+<div id="auth" class="auth" hidden>
+  <form id="authForm" class="auth-card">
+    <img class="logo" src="icons/icon-192.png" alt="">
+    <h1>Волна</h1>
+    <p id="authSub" class="muted">Вход в аккаунт</p>
+    <label id="serverField" hidden>Адрес сервера<input id="authServer" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://xxx.trycloudflare.com"></label>
+    <label>Ник<input id="authUser" autocomplete="username" autocapitalize="off" spellcheck="false" required minlength="2" maxlength="24"></label>
+    <label>Пароль<input id="authPass" type="password" autocomplete="current-password" required minlength="6"></label>
+    <div id="authError" class="error"></div>
+    <button class="btn primary" id="authSubmit">Войти</button>
+    <button type="button" class="link" id="authToggle">Нет аккаунта? Зарегистрироваться</button>
+  </form>
+</div>
+
+<div id="app" class="app" hidden>
+  <nav id="servers" class="servers"></nav>
+  <aside id="sidebar" class="sidebar">
+    <header id="serverHeader" class="server-header"></header>
+    <div id="channels" class="channels"></div>
+    <div id="voicePanel" class="voice-panel" hidden></div>
+    <div id="userPanel" class="user-panel"></div>
+  </aside>
+  <div id="scrim" class="scrim"></div>
+  <main class="main">
+    <header class="chan-header">
+      <button id="menuBtn" class="icon-btn only-mobile" aria-label="Меню"></button>
+      <span id="chanTitle" class="chan-title"></span>
+      <button id="membersBtn" class="icon-btn" aria-label="Участники"></button>
+    </header>
+    <section id="emptyView" class="empty"></section>
+    <section id="textView" class="text-view" hidden>
+      <div id="messages" class="messages"></div>
+      <div id="typing" class="typing"></div>
+      <form id="composer" class="composer">
+        <textarea id="msgInput" rows="1" placeholder="Сообщение" maxlength="2000" enterkeyhint="send"></textarea>
+        <button class="send-btn" id="sendBtn" aria-label="Отправить"></button>
+      </form>
+    </section>
+    <section id="callView" class="call-view" hidden>
+      <div id="tiles" class="tiles"></div>
+      <div id="callBar" class="call-bar"></div>
+    </section>
+  </main>
+  <aside id="members" class="members"></aside>
+</div>
+<div id="audios" hidden></div>
+<div id="modal" class="modal" hidden></div>
+<div id="toast" class="toast"></div>
+<script src="config.js"></script>
+<script src="vendor/socket.io.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

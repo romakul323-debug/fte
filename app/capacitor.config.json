@@ -1,0 +1,17 @@
+{
+  "appId": "ru.volna.messenger",
+  "appName": "Волна",
+  "webDir": "www",
+  "backgroundColor": "#1e1f22",
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#1e1f22"
+  },
+  "plugins": {
+    "Keyboard": { "resize": "native", "resizeOnFullScreen": true },
+    "StatusBar": { "style": "DARK", "backgroundColor": "#1e1f22", "overlaysWebView": false }
+  }
+}

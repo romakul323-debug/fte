@@ -1,0 +1,20 @@
+{
+  "name": "volna-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Волна — приложение для Android и iOS (Capacitor)",
+  "scripts": {
+    "prepare-web": "node prepare-web.js",
+    "sync": "node prepare-web.js && npx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/ios": "^8.6.0",
+    "@capacitor/keyboard": "^8.0.6",
+    "@capacitor/status-bar": "^8.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0"
+  }
+}

@@ -22,6 +22,8 @@ const capPath = path.join(__dirname, 'capacitor.config.json');
 const cap = JSON.parse(fs.readFileSync(capPath, 'utf8'));
 if (server) cap.server = { url: server, errorPath: 'offline.html' };
 else delete cap.server;
+// своё имя браузера: туннель Tuna не показывает приложению страницу-предупреждение
+cap.overrideUserAgent = 'VolnaApp/1.0';
 fs.writeFileSync(capPath, JSON.stringify(cap, null, 2) + '\n');
 fs.copyFileSync(path.join(__dirname, 'offline.html'), path.join(dst, 'offline.html'));
 fs.writeFileSync(path.join(dst, 'offline-config.js'), `window.VOLNA_SERVER = ${JSON.stringify(server)};\n`);

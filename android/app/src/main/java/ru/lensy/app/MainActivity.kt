@@ -388,7 +388,11 @@ fun MainScreen(vm: LensyModel, onSettings: () -> Unit, onDns: () -> Unit) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Tile(Modifier.weight(1f), "❄", "منع التقطيع", vm.freezeHint ?: "الحرارة والرسومات") { vm.run(Action.FREEZE) }
+            Tile(Modifier.weight(1f), "◌", "كاش PUBG", vm.cacheHint ?: "الحجم والمسح") { vm.run(Action.CACHE) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Tile(Modifier.weight(1f), "◈", "LENSY DNS", "1.1.1.1 · مشفّر") { onDns() }
+            Tile(Modifier.weight(1f), "▣", "الشاشة", "${vm.refreshHz.toInt()} Hz · اضبط الأعلى") { Engine.openDisplay(ctx) }
         }
 
         LaunchButton(vm)
@@ -472,6 +476,7 @@ fun LaunchButton(vm: LensyModel) {
 
 @Composable
 fun ActionOverlay(vm: LensyModel) {
+    val ctx = LocalContext.current
     Box(Modifier.fillMaxSize().background(Color.Black).clickable(enabled = false) {}) {
         Darkness(0.6f)
         Column(
@@ -504,7 +509,11 @@ fun ActionOverlay(vm: LensyModel) {
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextBtn(Modifier.weight(1f), if (vm.phase == Phase.DONE) "تم" else "إلغاء", C.ash) { vm.cancel() }
-                if (vm.phase == Phase.DONE && vm.action != Action.LAUNCH) {
+                if (vm.phase == Phase.DONE && vm.action == Action.CACHE) {
+                    Box(Modifier.width(1.dp).height(16.dp).background(C.faint))
+                    if (vm.needUsageAccess) TextBtn(Modifier.weight(1f), "السماح بالوصول", C.bloodLight) { Engine.openUsageAccess(ctx) }
+                    else TextBtn(Modifier.weight(1f), "مسح الكاش", C.bloodLight) { vm.openGameStorage() }
+                } else if (vm.phase == Phase.DONE && vm.action != Action.LAUNCH) {
                     Box(Modifier.width(1.dp).height(16.dp).background(C.faint))
                     TextBtn(Modifier.weight(1f), "اقتحام", C.bloodLight) { vm.run(Action.LAUNCH) }
                 }

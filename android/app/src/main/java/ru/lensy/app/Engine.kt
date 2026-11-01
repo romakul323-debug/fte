@@ -1,6 +1,12 @@
 package ru.lensy.app
 
 import android.app.ActivityManager
+import android.app.AppOpsManager
+import android.app.usage.StorageStatsManager
+import android.net.Uri
+import android.os.Process
+import android.os.storage.StorageManager
+import android.provider.Settings
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -142,6 +148,40 @@ object Engine {
         val jitter = if (t.size > 1) t.zipWithNext { a, b -> abs(a - b) }.average() else 0.0
         return PingResult(t.average(), jitter, samples - t.size)
     }
+
+    // ---------- кэш игры ----------
+
+    fun hasUsageAccess(ctx: Context): Boolean {
+        val ops = ctx.getSystemService(AppOpsManager::class.java)
+        val mode = if (Build.VERSION.SDK_INT >= 29)
+            ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), ctx.packageName)
+        else @Suppress("DEPRECATION") ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), ctx.packageName)
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    /** Размер кэша и данных игры в байтах (нужен «Доступ к истории использования»). */
+    fun gameStorage(ctx: Context, pkg: String): Pair<Long, Long>? = try {
+        val ssm = ctx.getSystemService(StorageStatsManager::class.java)
+        val st = ssm.queryStatsForPackage(StorageManager.UUID_DEFAULT, pkg, Process.myUserHandle())
+        st.cacheBytes to st.dataBytes
+    } catch (e: Exception) { null }
+
+    fun openAppStorage(ctx: Context, pkg: String) {
+        ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    fun openUsageAccess(ctx: Context) {
+        ctx.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    fun openDisplay(ctx: Context) {
+        ctx.startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    fun mb(bytes: Long): String =
+        if (bytes >= 1_073_741_824) "%.1f GB".format(java.util.Locale.US, bytes / 1_073_741_824.0)
+        else "%d MB".format(java.util.Locale.US, bytes / 1_048_576)
 
     // ---------- графика ----------
 

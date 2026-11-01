@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
 enum class LineState { OK, WARN, WORK, INFO }
 data class Line(val id: Long, val title: String, val value: String, val state: LineState, val hint: String? = null)
 
-enum class Action(val title: String) { RAM("تنظيف الذاكرة"), LAG("إزالة اللاغ"), FREEZE("منع التقطيع"), LAUNCH("اقتحام") }
+enum class Action(val title: String) { RAM("تنظيف الذاكرة"), LAG("إزالة اللاغ"), FREEZE("منع التقطيع"), CACHE("كاش PUBG"), LAUNCH("اقتحام") }
 enum class Phase { IDLE, RUNNING, DONE, LAUNCHING }
 
 class LensyModel(app: Application) : AndroidViewModel(app) {
@@ -34,6 +34,8 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
     var bestPing by mutableStateOf<Pair<String, Int>?>(null); private set
     var freed by mutableStateOf<String?>(null); private set
     var freezeHint by mutableStateOf<String?>(null); private set
+    var cacheHint by mutableStateOf<String?>(null); private set
+    var needUsageAccess by mutableStateOf(false); private set
     var refreshHz by mutableStateOf(60f)
 
     var editionId by mutableStateOf(prefs.getString("edition", "kr") ?: "kr")
@@ -85,6 +87,7 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
                 Action.RAM -> ram(0.0, 1.0)
                 Action.LAG -> lag()
                 Action.FREEZE -> freeze()
+                Action.CACHE -> cache()
                 Action.LAUNCH -> {
                     quick()
                     ram(0.3, 0.8)
@@ -194,6 +197,32 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
         add(0.8, Line(0, "الرسومات في PUBG", g, LineState.OK))
         add(0.9, Line(0, "معدل الإطارات", f, LineState.OK, "الظلال والتنعيم — إيقاف. أعلى = حرارة وتقطيع"))
     }
+
+    private suspend fun cache() {
+        val e = edition
+        val installed = ctx.packageManager.getLaunchIntentForPackage(e.pkg) != null
+        add(0.2, Line(0, "PUBG ${e.name}", if (installed) "مثبّتة" else "غير موجودة",
+            if (installed) LineState.OK else LineState.WARN, if (installed) null else "اختر الإصدار من الإعدادات"))
+        if (!installed) return
+        needUsageAccess = !Engine.hasUsageAccess(ctx)
+        if (needUsageAccess) {
+            add(0.6, Line(0, "حجم الكاش", "—", LineState.WARN,
+                "اسمح لـ Lensy بـ «الوصول إلى بيانات الاستخدام» لرؤية الحجم"))
+        } else {
+            val st = Engine.gameStorage(ctx, e.pkg)
+            if (st != null) {
+                cacheHint = Engine.mb(st.first)
+                add(0.5, Line(0, "حجم الكاش", Engine.mb(st.first),
+                    if (st.first > 500L * 1_048_576) LineState.WARN else LineState.OK,
+                    if (st.first > 500L * 1_048_576) "كاش كبير — المسح يقلل التحميل والتقطيع" else null))
+                add(0.7, Line(0, "بيانات اللعبة", Engine.mb(st.second), LineState.INFO))
+            }
+        }
+        add(0.9, Line(0, "المسح", "يدوي", LineState.INFO,
+            "اضغط «مسح الكاش» ← التخزين ← «مسح ذاكرة التخزين المؤقت». لا تضغط «مسح البيانات» — سيُحذف التحميل والإعدادات"))
+    }
+
+    fun openGameStorage() = Engine.openAppStorage(ctx, edition.pkg)
 
     // ---------- строки ----------
 

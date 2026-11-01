@@ -24,10 +24,13 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen:
-          UIColorName: ""
+          UIColorName: LaunchBlack
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIUserInterfaceStyle: Dark
+        UIAppFonts:
+          - PirataOne-Regular.ttf
+        UIStatusBarStyle: UIStatusBarStyleLightContent
         UIRequiresFullScreen: true
         ITSAppUsesNonExemptEncryption: false
         LSApplicationQueriesSchemes:

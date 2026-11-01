@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ProfilesView: View {
     @EnvironmentObject var m: SystemMonitor
+    @EnvironmentObject var launcher: Launcher
     @State private var selected: Profile?
     @State private var copied = false
 
@@ -21,9 +22,15 @@ struct ProfilesView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .foregroundStyle(current == p ? .black : .white)
-                        .background(current == p ? Theme.accent : Theme.card,
-                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .foregroundStyle(current == p ? Theme.bone : Theme.steel)
+                        .background {
+                            if current == p {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.hellGradient)
+                                    .shadow(color: Theme.blood.opacity(0.8), radius: 12)
+                            } else {
+                                HellPanel(radius: 14)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                 }
@@ -32,13 +39,13 @@ struct ProfilesView: View {
             let s = Recommender.settings(current, tier: m.model.tier, hz: m.screenHz)
             Card {
                 HStack {
-                    Text(current.title).font(.title2.bold())
+                    Text(current.title).font(Theme.heading(26)).foregroundStyle(Theme.bone)
                     if current == recommended {
                         Text("ДЛЯ ТЕБЯ")
                             .font(.caption2.bold())
                             .padding(.horizontal, 8).padding(.vertical, 4)
-                            .foregroundStyle(.black)
-                            .background(Color.green, in: Capsule())
+                            .foregroundStyle(Theme.bone)
+                            .background(Theme.blood, in: Capsule())
                     }
                 }
                 Text(current.subtitle).font(.subheadline).foregroundStyle(Theme.dim)
@@ -48,10 +55,10 @@ struct ProfilesView: View {
                         HStack {
                             Text(r.name).foregroundStyle(Theme.dim)
                             Spacer()
-                            Text(r.value).bold()
+                            Text(r.value).font(.system(.body, design: .serif).weight(.heavy)).foregroundStyle(Theme.bone)
                         }
                         .padding(.vertical, 11)
-                        if r.id != s.rows.last?.id { Divider().overlay(Theme.card2) }
+                        if r.id != s.rows.last?.id { Divider().overlay(Theme.darkBlood) }
                     }
                 }
 
@@ -66,7 +73,7 @@ struct ProfilesView: View {
             }
 
             Card {
-                Text("Как применить").font(.headline)
+                Text("Как применить").font(Theme.heading(20)).foregroundStyle(Theme.bone)
                 step(1, "Открой PUBG MOBILE → Настройки → Графика и звук.")
                 step(2, "Выставь значения из таблицы выше.")
                 step(3, "Если нужного пункта нет, выбери ближайший доступный: игра скрывает варианты, которые твой iPhone не тянет.")
@@ -78,19 +85,12 @@ struct ProfilesView: View {
                     Label(copied ? "Скопировано" : "Скопировать настройки", systemImage: copied ? "checkmark" : "doc.on.doc")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(Theme.card2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .foregroundStyle(Theme.bone)
+                        .background(HellPanel(radius: 12))
                 }
                 .buttonStyle(.plain)
 
-                Button { GameLauncher.launch() } label: {
-                    Label("Открыть PUBG MOBILE", systemImage: "play.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .foregroundStyle(.black)
-                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .buttonStyle(.plain)
+                HellButton(title: "ПРИЗВАТЬ PUBG", big: false) { launcher.startCountdown() }
             }
         }
         .onChange(of: selected) { _ in copied = false }
@@ -99,7 +99,7 @@ struct ProfilesView: View {
     private func step(_ n: Int, _ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text("\(n)").font(.caption.bold()).frame(width: 22, height: 22)
-                .foregroundStyle(.black).background(Theme.accent, in: Circle())
+                .foregroundStyle(Theme.bone).background(Theme.blood, in: Circle())
             Text(text).font(.subheadline).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -130,20 +130,12 @@ struct PingView: View {
                 ForEach(ping.targets) { t in row(t) }
             }
 
-            Button {
+            HellButton(title: ping.running ? "ЗАМЕРЯЮ…" : (ping.results.isEmpty ? "ЗАМЕРИТЬ ПИНГ" : "ЕЩЁ РАЗ"),
+                       icon: "bolt.horizontal.fill") {
                 Task { await ping.runAll() }
-            } label: {
-                HStack {
-                    if ping.running { ProgressView().tint(.black) }
-                    Text(ping.running ? "Проверяю…" : (ping.results.isEmpty ? "Проверить пинг" : "Проверить ещё раз"))
-                }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .foregroundStyle(.black)
-                .background(Theme.accent.opacity(ping.running ? 0.6 : 1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .disabled(ping.running || !m.online)
+            .opacity(ping.running ? 0.6 : 1)
 
             Text("Разброс — насколько пинг скачет. Больше 15–20 мс заметно в перестрелках: обычно виноваты Wi‑Fi через стену, загрузки в фоне или VPN.")
                 .font(.caption).foregroundStyle(Theme.dim)
@@ -154,7 +146,7 @@ struct PingView: View {
         HStack(spacing: 12) {
             Text(t.flag).font(.title2)
             VStack(alignment: .leading, spacing: 2) {
-                Text(t.name).font(.subheadline.bold())
+                Text(t.name).font(.subheadline.bold()).foregroundStyle(Theme.bone)
                 if let r = ping.results[t.id] {
                     Text("разброс \(Int(r.jitter)) мс" + (r.loss > 0 ? " · потери \(r.loss)/\(PingTester.samples)" : ""))
                         .font(.caption).foregroundStyle(Theme.dim)
@@ -172,7 +164,7 @@ struct PingView: View {
             }
         }
         .padding(14)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(HellPanel(radius: 16))
     }
 }
 
@@ -216,16 +208,16 @@ struct TipsView: View {
     var body: some View {
         Screen(title: "Советы") {
             Card {
-                Label("Почему это работает", systemImage: "info.circle").font(.headline)
+                Label("Почему это работает", systemImage: "eye.fill").font(.headline).foregroundStyle(Theme.bone)
                 Text("iOS не даёт ни одному приложению менять настройки другой игры или закрывать её фоновые процессы. Поэтому реальный прирост дают правильные настройки в самом PUBG и системы iPhone. Всё ниже проверено на практике.")
                     .font(.subheadline).foregroundStyle(Theme.dim)
             }
             ForEach(tips) { tip in
                 Card {
                     HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: tip.icon).font(.title3).foregroundStyle(Theme.accent).frame(width: 28)
+                        Image(systemName: tip.icon).font(.title3).foregroundStyle(Theme.blood).shadow(color: Theme.blood, radius: 6).frame(width: 28)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(tip.title).font(.headline)
+                            Text(tip.title).font(.headline).foregroundStyle(Theme.bone)
                             Text(tip.text).font(.subheadline).foregroundStyle(Theme.dim)
                                 .fixedSize(horizontal: false, vertical: true)
                         }

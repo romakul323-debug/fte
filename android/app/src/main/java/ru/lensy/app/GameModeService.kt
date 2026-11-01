@@ -42,8 +42,8 @@ class GameModeService : Service() {
 
     private fun startInForeground() {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CH_MODE, "Игровой режим", NotificationManager.IMPORTANCE_LOW))
-        nm.createNotificationChannel(NotificationChannel(CH_HEAT, "Перегрев", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(CH_MODE, "وضع اللعب", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CH_HEAT, "الحرارة", NotificationManager.IMPORTANCE_HIGH))
         val stop = PendingIntent.getService(
             this, 1, Intent(this, GameModeService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE
@@ -53,11 +53,11 @@ class GameModeService : Service() {
         )
         val n = Notification.Builder(this, CH_MODE)
             .setSmallIcon(android.R.drawable.ic_lock_idle_low_battery)
-            .setContentTitle("Lensy · игровой режим")
-            .setContentText("Wi‑Fi без энергосбережения · слежу за нагревом")
+            .setContentTitle("Lensy · وضع اللعب")
+            .setContentText("واي فاي بلا توفير طاقة · مراقبة الحرارة")
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Выключить", stop).build())
+            .addAction(Notification.Action.Builder(null, "إيقاف", stop).build())
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(ID_MODE, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -91,8 +91,8 @@ class GameModeService : Service() {
                 warned = true
                 val n = Notification.Builder(this, CH_HEAT)
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
-                    .setContentTitle("Телефон перегрелся")
-                    .setContentText("Сейчас начнутся фризы. Дай ему минуту между катками или снизь FPS.")
+                    .setContentTitle("الهاتف محموم")
+                    .setContentText("سيبدأ التقطيع الآن. أعطه دقيقة بين الجولات أو اخفض الإطارات.")
                     .setAutoCancel(true)
                     .build()
                 getSystemService(NotificationManager::class.java).notify(ID_HEAT, n)

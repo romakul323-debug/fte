@@ -26,11 +26,11 @@ data class PingResult(val avg: Double, val jitter: Double, val loss: Int)
 
 object Engine {
     val editions = listOf(
-        Edition("kr", "Корея (KR)", "com.pubg.krmobile"),
-        Edition("global", "Global", "com.tencent.ig"),
+        Edition("kr", "الكورية (KR)", "com.pubg.krmobile"),
+        Edition("global", "العالمية", "com.tencent.ig"),
         Edition("bgmi", "BGMI", "com.pubg.imobile"),
-        Edition("vn", "Вьетнам", "com.vng.pubgmobile"),
-        Edition("tw", "Тайвань", "com.rekoo.pubgm"),
+        Edition("vn", "فيتنام", "com.vng.pubgmobile"),
+        Edition("tw", "تايوان", "com.rekoo.pubgm"),
         Edition("lite", "Lite", "com.tencent.iglite"),
     )
     private val gamePackages = editions.map { it.pkg }.toSet()
@@ -83,10 +83,10 @@ object Engine {
         if (Build.VERSION.SDK_INT >= 29) ctx.getSystemService(PowerManager::class.java).currentThermalStatus else 0
 
     fun thermalText(s: Int) = when {
-        s <= PowerManager.THERMAL_STATUS_NONE -> "холодный"
-        s == PowerManager.THERMAL_STATUS_LIGHT -> "тёплый"
-        s == PowerManager.THERMAL_STATUS_MODERATE -> "горячий"
-        else -> "перегрев"
+        s <= PowerManager.THERMAL_STATUS_NONE -> "بارد"
+        s == PowerManager.THERMAL_STATUS_LIGHT -> "دافئ"
+        s == PowerManager.THERMAL_STATUS_MODERATE -> "ساخن"
+        else -> "محموم"
     }
 
     fun powerSave(ctx: Context) = ctx.getSystemService(PowerManager::class.java).isPowerSaveMode
@@ -98,12 +98,12 @@ object Engine {
 
     fun network(ctx: Context): Pair<String, Boolean> {
         val cm = ctx.getSystemService(ConnectivityManager::class.java)
-        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return "нет сети" to false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return "لا شبكة" to false
         val type = when {
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi‑Fi"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Сотовая"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "واي فاي"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "خلوي"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
-            else -> "Другая"
+            else -> "أخرى"
         }
         val vpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
         return type to vpn
@@ -150,11 +150,11 @@ object Engine {
         val ram = totalMB(ctx) / 1024
         // Высокие FPS в PUBG открываются только на «Плавной» — она же даёт меньше всего фризов
         return when {
-            hot -> "Плавная" to "Экстрим (60)"
-            refreshHz >= 119 && ram >= 8 -> "Плавная" to "120 FPS"
-            refreshHz >= 89 && ram >= 6 -> "Плавная" to "90 FPS"
-            ram >= 8 -> "Сбалансированная" to "Экстрим (60)"
-            else -> "Плавная" to "Экстрим (60)"
+            hot -> "Smooth" to "Extreme 60"
+            refreshHz >= 119 && ram >= 8 -> "Smooth" to "120 FPS"
+            refreshHz >= 89 && ram >= 6 -> "Smooth" to "90 FPS"
+            ram >= 8 -> "Balanced" to "Extreme 60"
+            else -> "Smooth" to "Extreme 60"
         }
     }
 }

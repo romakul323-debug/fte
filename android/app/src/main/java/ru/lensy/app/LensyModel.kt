@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
 enum class LineState { OK, WARN, WORK, INFO }
 data class Line(val id: Long, val title: String, val value: String, val state: LineState, val hint: String? = null)
 
-enum class Action(val title: String) { RAM("ОЧИСТКА ОЗУ"), LAG("УБИРАЮ ЛАГИ"), FREEZE("АНТИ-ФРИЗ"), LAUNCH("ЗАЛЁТ") }
+enum class Action(val title: String) { RAM("تنظيف الذاكرة"), LAG("إزالة اللاغ"), FREEZE("منع التقطيع"), LAUNCH("اقتحام") }
 enum class Phase { IDLE, RUNNING, DONE, LAUNCHING }
 
 class LensyModel(app: Application) : AndroidViewModel(app) {
@@ -44,6 +44,9 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
         private set
     var dnd by mutableStateOf(prefs.getBoolean("dnd", false))
         private set
+    var inject by mutableStateOf(prefs.getBoolean("inject", true))
+        private set
+    fun changeInject(v: Boolean) { inject = v; prefs.edit().putBoolean("inject", v).apply() }
 
     fun setEdition(id: String) { editionId = id; prefs.edit().putString("edition", id).apply() }
     fun setAuto(v: Boolean) { autoLaunch = v; prefs.edit().putBoolean("auto", v).apply() }
@@ -86,13 +89,13 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
                     quick()
                     ram(0.3, 0.8)
                     if (gameMode) {
-                        add(0.9, Line(0, "Игровой режим", "включён", LineState.OK,
-                            "Wi‑Fi без энергосбережения" + if (dnd && Engine.dndAllowed(ctx)) " · не беспокоить" else ""))
+                        add(0.9, Line(0, "وضع اللعب", "مفعّل", LineState.OK,
+                            "واي فاي بلا توفير طاقة" + if (dnd && Engine.dndAllowed(ctx)) " · عدم الإزعاج" else ""))
                         GameModeService.start(ctx, dnd)
                     }
                 }
             }
-            add(1.0, Line(0, "Готово", "", LineState.INFO))
+            add(1.0, Line(0, "تم", "", LineState.INFO))
             phase = Phase.DONE
             if (a == Action.LAUNCH) {
                 delay(600)
@@ -107,9 +110,13 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
         val ok = Engine.launch(ctx, e.pkg)
         viewModelScope.launch {
             if (!ok) {
-                note = "PUBG ${e.name} не найдена на телефоне. Выбери версию в настройках."
+                note = "لم يتم العثور على PUBG ${e.name} في الهاتف. اختر الإصدار من الإعدادات."
                 phase = Phase.DONE
             } else {
+                if (inject) {
+                    delay(900)
+                    InjectOverlay.show(ctx, "PUBG ${e.id.uppercase()}", freed, gameMode)
+                }
                 delay(1500)
                 if (phase == Phase.LAUNCHING) phase = Phase.IDLE
             }
@@ -120,34 +127,34 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun quick() {
         val t = Engine.thermal(ctx)
-        add(0.1, Line(0, "Нагрев", Engine.thermalText(t), if (t >= 3) LineState.WARN else LineState.OK,
-            if (t >= 3) "Дай телефону остыть — иначе фризы" else null))
-        if (Engine.powerSave(ctx)) add(0.2, Line(0, "Энергосбережение", "включено", LineState.WARN, "Выключи — оно режет FPS"))
+        add(0.1, Line(0, "الحرارة", Engine.thermalText(t), if (t >= 3) LineState.WARN else LineState.OK,
+            if (t >= 3) "دع الهاتف يبرد — وإلا سيحدث تقطيع" else null))
+        if (Engine.powerSave(ctx)) add(0.2, Line(0, "توفير الطاقة", "مفعّل", LineState.WARN, "أوقفه — يخفض الإطارات"))
     }
 
     private suspend fun ram(p0: Double, p1: Double) {
         val before = Engine.availMB(ctx)
-        add(p0 + (p1 - p0) * 0.2, Line(0, "Свободно сейчас", gb(before), LineState.INFO))
-        val i = add(p0 + (p1 - p0) * 0.35, Line(0, "Закрываю фоновые", "…", LineState.WORK))
+        add(p0 + (p1 - p0) * 0.2, Line(0, "المتاح الآن", gb(before), LineState.INFO))
+        val i = add(p0 + (p1 - p0) * 0.35, Line(0, "إغلاق تطبيقات الخلفية", "…", LineState.WORK))
         val r = Engine.killBackground(ctx)
         val gained = (r.afterMB - r.beforeMB).coerceAtLeast(0.0)
-        freed = if (gained > 30) "+${gained.toInt()} МБ" else "чисто"
-        replace(i, Line(0, "Закрываю фоновые", "${r.apps} прил.", LineState.OK))
-        add(p0 + (p1 - p0) * 0.75, Line(0, "Освобождено", if (gained > 30) "+${gained.toInt()} МБ" else "уже чисто", LineState.OK))
-        add(p1, Line(0, "Свободно для игры", gb(r.afterMB), LineState.OK))
+        freed = if (gained > 30) "+${gained.toInt()} MB" else null
+        replace(i, Line(0, "إغلاق تطبيقات الخلفية", "${r.apps} تطبيق", LineState.OK))
+        add(p0 + (p1 - p0) * 0.75, Line(0, "تم التحرير", if (gained > 30) "+${gained.toInt()} MB" else "نظيفة", LineState.OK))
+        add(p1, Line(0, "المتاح للعبة", gb(r.afterMB), LineState.OK))
     }
 
     private suspend fun lag() {
         val (net, vpn) = Engine.network(ctx)
-        add(0.08, Line(0, "Сеть", net, if (net == "нет сети") LineState.WARN else LineState.OK,
-            when { net == "Сотовая" -> "Wi‑Fi обычно стабильнее сотовой"; vpn -> "VPN добавляет пинг — выключи"; else -> null }))
-        if (Engine.dataSaver(ctx)) add(0.12, Line(0, "Экономия трафика", "включена", LineState.WARN, "Выключи — режет сеть в фоне"))
+        add(0.08, Line(0, "الشبكة", net, if (net == "لا شبكة") LineState.WARN else LineState.OK,
+            when { net == "خلوي" -> "الواي فاي عادةً أكثر استقراراً"; vpn -> "VPN يزيد البينغ — أوقفه"; else -> null }))
+        if (Engine.dataSaver(ctx)) add(0.12, Line(0, "توفير البيانات", "مفعّل", LineState.WARN, "أوقفه — يقيّد الشبكة"))
         val regions = listOf(
-            "Корея" to "ec2.ap-northeast-2.amazonaws.com",
-            "Япония" to "ec2.ap-northeast-1.amazonaws.com",
-            "Москва" to "ya.ru",
-            "Европа" to "ec2.eu-central-1.amazonaws.com",
-            "Ближ. Восток" to "ec2.me-south-1.amazonaws.com",
+            "كوريا" to "ec2.ap-northeast-2.amazonaws.com",
+            "اليابان" to "ec2.ap-northeast-1.amazonaws.com",
+            "موسكو" to "ya.ru",
+            "أوروبا" to "ec2.eu-central-1.amazonaws.com",
+            "الشرق الأوسط" to "ec2.me-south-1.amazonaws.com",
         )
         val idx = regions.mapIndexed { k, r -> add(0.16 + 0.05 * k, Line(0, r.first, "…", LineState.WORK)) }
         val results = regions.mapIndexed { k, r ->
@@ -155,37 +162,37 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
                 val res = Engine.ping(r.second)
                 if (res != null) {
                     val ms = res.avg.toInt()
-                    replace(idx[k], Line(0, r.first, "$ms мс · ±${res.jitter.toInt()}",
+                    replace(idx[k], Line(0, r.first, "$ms ms · ±${res.jitter.toInt()}",
                         if (ms > 150 || res.jitter > 25) LineState.WARN else LineState.OK))
-                } else replace(idx[k], Line(0, r.first, "нет ответа", LineState.WARN))
+                } else replace(idx[k], Line(0, r.first, "لا استجابة", LineState.WARN))
                 res?.let { r.first to it }
             }
         }.awaitAll().filterNotNull()
         bump(0.8)
         results.minByOrNull { it.second.avg }?.let { best ->
             bestPing = best.first to best.second.avg.toInt()
-            add(0.9, Line(0, "Лучший сервер", best.first, LineState.OK,
-                if (best.second.jitter > 20) "Пинг скачет: ближе к роутеру, без VPN и загрузок" else "Выбери этот регион в лобби PUBG"))
+            add(0.9, Line(0, "أفضل سيرفر", best.first, LineState.OK,
+                if (best.second.jitter > 20) "البينغ يقفز: اقترب من الراوتر، بدون VPN وتنزيلات" else "اختر هذه المنطقة في لوبي PUBG"))
         }
     }
 
     private suspend fun freeze() {
         val t = Engine.thermal(ctx)
         val hot = t >= 2
-        add(0.15, Line(0, "Нагрев", Engine.thermalText(t), if (hot) LineState.WARN else LineState.OK,
-            if (hot) "Сними чехол, не играй на зарядке — горячий телефон сбрасывает частоту" else null))
+        add(0.15, Line(0, "الحرارة", Engine.thermalText(t), if (hot) LineState.WARN else LineState.OK,
+            if (hot) "انزع الغطاء ولا تلعب أثناء الشحن — الهاتف الساخن يخفض السرعة" else null))
         val ps = Engine.powerSave(ctx)
-        add(0.3, Line(0, "Энергосбережение", if (ps) "включено" else "выключено", if (ps) LineState.WARN else LineState.OK,
-            if (ps) "Выключи — режет процессор и FPS" else null))
-        add(0.45, Line(0, "Экран", "${refreshHz.toInt()} Гц", LineState.OK,
-            if (refreshHz < 89) null else "В настройках дисплея поставь максимальную частоту"))
+        add(0.3, Line(0, "توفير الطاقة", if (ps) "مفعّل" else "معطّل", if (ps) LineState.WARN else LineState.OK,
+            if (ps) "أوقفه — يبطئ المعالج ويخفض الإطارات" else null))
+        add(0.45, Line(0, "الشاشة", "${refreshHz.toInt()} Hz", LineState.OK,
+            if (refreshHz < 89) null else "اضبط أعلى معدل تحديث من إعدادات الشاشة"))
         val disk = Engine.freeDiskGB()
-        add(0.6, Line(0, "Память диска", "%.0f ГБ своб.".format(disk), if (disk < 4) LineState.WARN else LineState.OK,
-            if (disk < 4) "Меньше 4 ГБ — текстуры подгружаются рывками" else null))
+        add(0.6, Line(0, "مساحة التخزين", "%.0f GB".format(disk), if (disk < 4) LineState.WARN else LineState.OK,
+            if (disk < 4) "أقل من 4 غيغابايت — تحميل الخامات يصبح متقطعاً" else null))
         val (g, f) = Engine.recommended(ctx, refreshHz, hot)
         freezeHint = "$g · $f"
-        add(0.8, Line(0, "Графика в PUBG", g, LineState.OK))
-        add(0.9, Line(0, "Частота кадров", f, LineState.OK, "Тени и сглаживание — выкл. Выше — нагрев и фризы"))
+        add(0.8, Line(0, "الرسومات في PUBG", g, LineState.OK))
+        add(0.9, Line(0, "معدل الإطارات", f, LineState.OK, "الظلال والتنعيم — إيقاف. أعلى = حرارة وتقطيع"))
     }
 
     // ---------- строки ----------
@@ -204,6 +211,6 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
     private fun bump(p: Double) { progress = maxOf(progress, p) }
 
     companion object {
-        fun gb(mb: Double) = "%.1f ГБ".format(mb / 1024)
+        fun gb(mb: Double) = "%.1f GB".format(java.util.Locale.US, mb / 1024)
     }
 }

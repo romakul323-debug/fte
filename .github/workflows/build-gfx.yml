@@ -2,6 +2,7 @@ name: Сборка Lensy Optimization (iOS)
 on:
   push:
     branches: [gfx]
+    paths: ['gfx/**', '.github/workflows/build-gfx.yml']
   workflow_dispatch: {}
 permissions:
   contents: write

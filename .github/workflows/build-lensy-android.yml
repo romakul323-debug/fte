@@ -1,0 +1,36 @@
+name: Сборка Lensy (Android)
+on:
+  push:
+    branches: [gfx]
+    paths: ['android/**', '.github/workflows/build-lensy-android.yml']
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: lensy-android
+  cancel-in-progress: true
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: Сборка APK
+        working-directory: android
+        run: gradle --no-daemon assembleRelease
+      - name: Релиз (не трогает другие релизы)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk Lensy.apk
+          gh release delete lensy-android --yes --cleanup-tag || true
+          gh release create lensy-android Lensy.apk --target "$GITHUB_SHA" --latest=false \
+            --title "Lensy · Android · сборка ${{ github.run_number }}" \
+            --notes "Скачать: https://github.com/${{ github.repository }}/releases/download/lensy-android/Lensy.apk"

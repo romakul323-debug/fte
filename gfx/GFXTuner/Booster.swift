@@ -44,7 +44,39 @@ enum HeatReminder {
 /// Шаги отражают то, что Lensy реально сделал перед запуском.
 @MainActor
 enum Injector {
+    static func requestBanners() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    /// Баннеры поверх игры: в горизонтальной PUBG Dynamic Island скрыт, а уведомления видны.
+    static func banners(game: String, freedMB: Double?) {
+        let c = UNUserNotificationCenter.current()
+        c.removeDeliveredNotifications(withIdentifiers: ["inject"])
+        c.removePendingNotificationRequests(withIdentifiers: ["inject1", "inject2", "inject3", "inject4"])
+        let freed = freedMB.map { $0 > 30 ? " · +\(Int($0)) MB" : "" } ?? ""
+        let plan: [(String, Double, String, String, Bool)] = [
+            ("inject1", 2.5, "حقن LENSY · 10%", "▰▱▱▱▱▱▱▱▱▱  ربط LENSY بـ \(game)", false),
+            ("inject2", 5.0, "حقن LENSY · 45%", "▰▰▰▰▱▱▱▱▱▱  تثبيت الشبكة\(freed)", false),
+            ("inject3", 7.5, "حقن LENSY · 80%", "▰▰▰▰▰▰▰▰▱▱  تهيئة الإطارات", false),
+            ("inject4", 10.0, "تم الحقن ✓ · 100%", "▰▰▰▰▰▰▰▰▰▰  جاهز للقتال", true),
+        ]
+        for (id, delay, title, body, sound) in plan {
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.threadIdentifier = "inject"
+            if sound { content.sound = .default }
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
+            c.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+        }
+        // убираем промежуточные из шторки, оставляем только «تم»
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
+            c.removeDeliveredNotifications(withIdentifiers: ["inject1", "inject2", "inject3"])
+        }
+    }
+
     static func run(game: String, freedMB: Double?) {
+        banners(game: game, freedMB: freedMB)
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let steps = [
             (0.10, "ربط LENSY باللعبة"),
@@ -143,6 +175,7 @@ final class Booster: ObservableObject {
         guard !didAuto else { return }
         didAuto = true
         Task { await GameLauncher.resolveBundleIDs() }
+        if inject { Injector.requestBanners() }
         if autoLaunch { run(.launch, monitor: monitor) }
     }
 

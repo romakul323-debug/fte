@@ -100,5 +100,71 @@ class Player extends AudioWorkletProcessor {
   }
 }
 
+// Шумодав-гейт с упреждением: пропускает голос и отсекает короткие щелчки (тапы по экрану, клавиатура).
+// Звук задерживается на ~30 мс, чтобы решение «это голос» успевало до начала слова.
+class Gate extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.enabled = true;
+    this.auto = true;
+    this.manual = -45; // дБ
+    this.muted = false;
+    this.floor = -60;
+    this.delay = new Float32Array(Math.ceil(sampleRate * 0.03));
+    this.di = 0;
+    this.above = 0;
+    this.need = Math.max(3, Math.round((0.02 * sampleRate) / 128)); // ~20 мс выше порога
+    this.hold = 0;
+    this.holdBlocks = Math.round((0.32 * sampleRate) / 128);
+    this.gain = 0;
+    this.att = 1 - Math.exp(-1 / (0.004 * sampleRate));
+    this.rel = 1 - Math.exp(-1 / (0.09 * sampleRate));
+    this.report = 0;
+    this.port.onmessage = (e) => {
+      const d = e.data || {};
+      if ('enabled' in d) this.enabled = !!d.enabled;
+      if ('auto' in d) this.auto = !!d.auto;
+      if ('threshold' in d) this.manual = +d.threshold;
+      if ('muted' in d) this.muted = !!d.muted;
+      if ('report' in d) this.report = d.report ? 1 : 0;
+    };
+  }
+  process(inputs, outputs) {
+    const inp = inputs[0] && inputs[0][0];
+    const out = outputs[0][0];
+    if (!out) return true;
+    if (!inp) { out.fill(0); return true; }
+    let sum = 0;
+    for (let i = 0; i < inp.length; i++) sum += inp[i] * inp[i];
+    const level = 10 * Math.log10(sum / inp.length + 1e-12);
+    // следим за фоновым шумом: быстро вниз, медленно вверх
+    if (level < this.floor) this.floor += (level - this.floor) * 0.2;
+    else this.floor += Math.min(0.006, (level - this.floor) * 0.001);
+    const thr = this.auto ? Math.min(-22, Math.max(-58, this.floor + 11)) : this.manual;
+    if (level > thr) this.above++; else this.above = 0;
+    let open;
+    if (!this.enabled) open = true;
+    else if (this.above >= this.need) { open = true; this.hold = this.holdBlocks; }
+    else if (this.hold > 0 && level > thr - 6) { open = true; this.hold--; }
+    else if (this.hold > 0) { open = true; this.hold -= 2; }
+    else open = false;
+    if (this.muted) open = false;
+    const target = open ? 1 : 0;
+    const d = this.delay, n = d.length;
+    for (let i = 0; i < out.length; i++) {
+      const x = inp[i];
+      const y = this.enabled ? d[this.di] : x;
+      d[this.di] = x;
+      this.di = (this.di + 1) % n;
+      this.gain += (target - this.gain) * (target > this.gain ? this.att : this.rel);
+      out[i] = y * this.gain;
+    }
+    for (let c = 1; c < outputs[0].length; c++) outputs[0][c].set(out);
+    if (this.report && ++this.report % 12 === 0) this.port.postMessage({ level, thr, open });
+    return true;
+  }
+}
+
+registerProcessor('volna-gate', Gate);
 registerProcessor('volna-capture', Capture);
 registerProcessor('volna-player', Player);

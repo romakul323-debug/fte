@@ -69,4 +69,35 @@ async function flush() {
   await writing;
 }
 
-module.exports = { DIR, data, init, save, flush };
+// ---------- картинки (аватары, баннеры, вложения) ----------
+const MEDIA_DIR = path.join(DIR, 'media');
+fs.mkdirSync(MEDIA_DIR, { recursive: true });
+const SAFE_ID = /^[a-f0-9-]{36}$/;
+let mediaTable = false;
+async function putMedia(id, mime, buf) {
+  if (!SAFE_ID.test(id)) throw new Error('bad id');
+  if (pool) {
+    if (!mediaTable) {
+      await pool.query('CREATE TABLE IF NOT EXISTS volna_media (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data BYTEA NOT NULL)');
+      mediaTable = true;
+    }
+    await pool.query('INSERT INTO volna_media (id, mime, data) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING', [id, mime, buf]);
+    return;
+  }
+  fs.writeFileSync(path.join(MEDIA_DIR, id + '.bin'), buf);
+  fs.writeFileSync(path.join(MEDIA_DIR, id + '.mime'), mime);
+}
+async function getMedia(id) {
+  if (!SAFE_ID.test(id)) return null;
+  if (pool) {
+    try {
+      const r = await pool.query('SELECT mime, data FROM volna_media WHERE id = $1', [id]);
+      return r.rows[0] ? { mime: r.rows[0].mime, buf: r.rows[0].data } : null;
+    } catch { return null; }
+  }
+  try {
+    return { mime: fs.readFileSync(path.join(MEDIA_DIR, id + '.mime'), 'utf8'), buf: fs.readFileSync(path.join(MEDIA_DIR, id + '.bin')) };
+  } catch { return null; }
+}
+
+module.exports = { DIR, data, init, save, flush, putMedia, getMedia };

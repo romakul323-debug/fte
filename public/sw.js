@@ -1,7 +1,7 @@
 // Минимальный service worker: позволяет установить приложение
 // и открывает оболочку из кэша, если сеть пропала.
-const CACHE = 'volna-v1';
-const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/manifest.json', '/icons/icon-192.png'];
+const CACHE = 'volna-v3';
+const SHELL = ['/', '/index.html', '/manifest.json', '/icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -36,11 +36,35 @@ function loadSecret() {
 // ---------- helpers ----------
 const COLORS = ['#5865f2', '#3ba55d', '#faa61a', '#ed4245', '#eb459e', '#9b59b6', '#1abc9c', '#e67e22', '#00a8fc'];
 const uid = () => crypto.randomUUID();
-const pubUser = (u) => ({ id: u.id, username: u.username, color: u.color });
+const HEX = /^#[0-9a-f]{6}$/i;
+const RINGS = ['none', 'glow', 'neon', 'rainbow', 'aurora', 'pulse'];
+const NAME_KINDS = ['solid', 'gradient', 'shine'];
+const STATUSES = ['online', 'idle', 'dnd', 'invisible'];
+const clip = (v, n) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, n);
+const hexOr = (v, d) => (HEX.test(String(v || '')) ? String(v).toLowerCase() : d);
+const mediaOr = (v) => (/^[a-f0-9-]{36}$/.test(String(v || '')) ? String(v) : null);
+
+// всё, что видят другие о пользователе
+const pubUser = (u) => ({
+  id: u.id,
+  username: u.username,
+  color: u.color,
+  displayName: u.displayName || '',
+  avatar: u.avatar || null,
+  ring: u.ring || 'none',
+  nameStyle: u.nameStyle || null,
+  accent: u.accent || null,
+  banner: u.banner || null,
+  bio: u.bio || '',
+  pronouns: u.pronouns || '',
+  customStatus: u.customStatus || null,
+  createdAt: u.createdAt || null,
+});
 const userById = (id) => db.data.users.find((u) => u.id === id);
 const serverById = (id) => db.data.servers.find((s) => s.id === id);
 const channelById = (id) => db.data.channels.find((c) => c.id === id);
 const isMember = (serverId, userId) => db.data.members.some((m) => m.serverId === serverId && m.userId === userId);
+const GONE = { id: 'gone', username: 'удалён', color: '#80848e' };
 
 function inviteCode() {
   const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -77,22 +101,46 @@ function createChannel(serverId, name, type) {
   return c;
 }
 
-const msgView = (m) => ({
-  id: m.id,
-  channelId: m.channelId,
-  text: m.text,
-  ts: m.ts,
-  author: pubUser(userById(m.userId) || { id: m.userId, username: 'удалён', color: '#80848e' }),
-});
+// личные переписки: канал типа dm на двоих
+const dmOf = (a, b) => db.data.channels.find((c) => c.type === 'dm' && c.members.includes(a) && c.members.includes(b));
+function dmView(c, meId) {
+  const other = userById(c.members.find((x) => x !== meId) || meId) || GONE;
+  return { id: c.id, type: 'dm', user: pubUser(other), lastTs: c.lastTs || c.createdAt || 0 };
+}
+
+const msgIndex = new Map(); // id -> сообщение (для ответов, правок, реакций)
+function indexMessages() {
+  msgIndex.clear();
+  for (const m of db.data.messages) msgIndex.set(m.id, m);
+}
+const msgView = (m) => {
+  const r = m.replyTo && msgIndex.get(m.replyTo);
+  return {
+    id: m.id,
+    channelId: m.channelId,
+    text: m.text,
+    ts: m.ts,
+    editedAt: m.editedAt || null,
+    author: pubUser(userById(m.userId) || GONE),
+    replyTo: m.replyTo
+      ? r
+        ? { id: r.id, authorId: r.userId, text: (r.text || (r.attachments?.length ? '🖼 Картинка' : '')).slice(0, 120) }
+        : { id: m.replyTo, deleted: true }
+      : null,
+    attachments: m.attachments || [],
+    reactions: m.reactions || {},
+  };
+};
 
 // ---------- HTTP ----------
 const app = express();
+app.use('/api/media', express.json({ limit: '4mb' }));
 app.use(express.json({ limit: '50kb' }));
 // приложения Android/iOS открывают страницу со своего адреса (https://localhost, capacitor://localhost),
 // поэтому API должен разрешать запросы с других источников
 app.use('/api', (req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -103,6 +151,41 @@ app.get('/config.js', (req, res) => {
   );
 });
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------- картинки ----------
+const MEDIA_LIMITS = { avatar: 400e3, banner: 900e3, attachment: 2.5e6 };
+const MEDIA_TYPES = { 'image/png': 1, 'image/jpeg': 1, 'image/webp': 1, 'image/gif': 1 };
+function httpUser(req) {
+  try {
+    const t = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    return userById(jwt.verify(t, SECRET).id) || null;
+  } catch { return null; }
+}
+const uploadRate = new Map(); // userId -> [время загрузок]
+app.post('/api/media', async (req, res) => {
+  const u = httpUser(req);
+  if (!u) return res.status(401).json({ error: 'Войди заново' });
+  const kind = MEDIA_LIMITS[req.body?.kind] ? req.body.kind : 'attachment';
+  const m = /^data:([\w/+.-]+);base64,(.+)$/s.exec(String(req.body?.data || ''));
+  if (!m || !MEDIA_TYPES[m[1]]) return res.status(400).json({ error: 'Можно только картинки PNG, JPG, WEBP или GIF' });
+  const buf = Buffer.from(m[2], 'base64');
+  if (!buf.length || buf.length > MEDIA_LIMITS[kind]) return res.status(413).json({ error: 'Картинка слишком большая' });
+  const now = Date.now();
+  const recent = (uploadRate.get(u.id) || []).filter((t) => now - t < 60e3);
+  if (recent.length >= 30) return res.status(429).json({ error: 'Слишком много загрузок, подожди минуту' });
+  recent.push(now);
+  uploadRate.set(u.id, recent);
+  const id = uid();
+  try { await db.putMedia(id, m[1], buf); } catch (e) { console.error('media', e.message); return res.status(500).json({ error: 'Не удалось сохранить' }); }
+  res.json({ id, mime: m[1], size: buf.length });
+});
+app.get('/media/:id', async (req, res) => {
+  const f = await db.getMedia(req.params.id);
+  if (!f) return res.sendStatus(404);
+  res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  res.set('Access-Control-Allow-Origin', '*');
+  res.type(f.mime).send(f.buf);
+});
 
 const NAME_RE = /^[\p{L}\p{N}_.\-]{2,24}$/u;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -334,9 +417,47 @@ const voiceOf = new Map(); // socketId -> channelId
 
 const voiceList = (channelId) => [...(voice.get(channelId)?.values() || [])];
 
+// статус, который видят другие: невидимка и отключённые — «не в сети»
+const presenceOf = (u) => (!u || !online.has(u.id) ? 'offline' : u.status === 'invisible' ? 'offline' : STATUSES.includes(u.status) ? u.status : 'online');
+
+// всем, кто может видеть пользователя: общие серверы и личные переписки
+function audienceRooms(userId) {
+  const rooms = new Set(['u:' + userId]);
+  for (const m of db.data.members) if (m.userId === userId) rooms.add('s:' + m.serverId);
+  for (const c of db.data.channels) if (c.type === 'dm' && c.members.includes(userId)) for (const x of c.members) rooms.add('u:' + x);
+  return [...rooms];
+}
+function emitTo(rooms, ev, data) {
+  let t = io;
+  for (const r of rooms) t = t.to(r);
+  t.emit(ev, data);
+}
+function channelRooms(c) {
+  return c.type === 'dm' ? c.members.map((x) => 'u:' + x) : ['s:' + c.serverId];
+}
+function broadcastPresence(u) {
+  emitTo(audienceRooms(u.id), 'presence', { userId: u.id, status: presenceOf(u) });
+}
+
+function voiceState(socket, u, muted) {
+  return {
+    socketId: socket.id,
+    userId: u.id,
+    username: u.username,
+    displayName: u.displayName || '',
+    color: u.color,
+    avatar: u.avatar || null,
+    ring: u.ring || 'none',
+    muted: !!muted,
+    deafened: false,
+    video: false,
+    screen: false,
+  };
+}
+
 function broadcastVoice(channelId) {
   const ch = channelById(channelId);
-  if (ch) io.to('s:' + ch.serverId).emit('voice:state', { channelId, states: voiceList(channelId) });
+  if (ch) emitTo(channelRooms(ch), 'voice:state', { channelId, states: voiceList(channelId) });
 }
 
 function leaveVoice(socket) {
@@ -364,9 +485,9 @@ function kickFromVoice(channelId, userId) {
   }
 }
 
-function voiceSnapshot(servers) {
+function voiceSnapshot(channelIds) {
   const snap = {};
-  for (const s of servers) for (const c of s.channels) if (c.type === 'voice' && voice.has(c.id)) snap[c.id] = voiceList(c.id);
+  for (const id of channelIds) if (voice.has(id)) snap[id] = voiceList(id);
   return snap;
 }
 
@@ -377,62 +498,116 @@ const reply = (cb, v) => {
 io.on('connection', (socket) => {
   const me = socket.user;
   const on = (ev, fn) =>
-    socket.on(ev, (payload, cb) => {
+    socket.on(ev, async (payload, cb) => {
       if (typeof payload === 'function') {
         cb = payload;
         payload = {};
       }
       try {
-        fn(payload || {}, cb);
+        await fn(payload || {}, cb);
       } catch (e) {
         console.error(ev, e);
         reply(cb, { error: 'Ошибка сервера' });
       }
     });
   const myServerIds = () => db.data.members.filter((m) => m.userId === me.id).map((m) => m.serverId);
+  const myDms = () => db.data.channels.filter((c) => c.type === 'dm' && c.members.includes(me.id));
+  // доступ к каналу: участник сервера или участник личной переписки
   const accessChannel = (id) => {
     const c = channelById(id);
-    return c && isMember(c.serverId, me.id) ? c : null;
+    if (!c) return null;
+    if (c.type === 'dm') return c.members.includes(me.id) ? c : null;
+    return isMember(c.serverId, me.id) ? c : null;
   };
+  const canSee = (otherId) =>
+    otherId === me.id ||
+    !!dmOf(me.id, otherId) ||
+    db.data.members.some((m) => m.userId === otherId && isMember(m.serverId, me.id));
+  const meInfo = () => ({ email: me.email || null, hasPassword: !!me.hash, google: !!me.googleId, status: me.status || 'online' });
 
   socket.join('u:' + me.id);
   for (const sid of myServerIds()) socket.join('s:' + sid);
   const count = (online.get(me.id) || 0) + 1;
   online.set(me.id, count);
-  if (count === 1) for (const sid of myServerIds()) socket.to('s:' + sid).emit('presence', { userId: me.id, online: true });
+  if (count === 1) broadcastPresence(me);
 
   on('init', (_, cb) => {
     const servers = myServerIds().map(serverById).filter(Boolean).map(serverView);
+    const dms = myDms().map((c) => dmView(c, me.id)).sort((a, b) => b.lastTs - a.lastTs);
     const ids = new Set([me.id]);
     servers.forEach((s) => s.members.forEach((u) => ids.add(u.id)));
-    reply(cb, {
-      user: pubUser(me),
-      me: { email: me.email || null, hasPassword: !!me.hash, google: !!me.googleId },
-      servers,
-      online: [...ids].filter((id) => online.has(id)),
-      voice: voiceSnapshot(servers),
-    });
+    dms.forEach((d) => ids.add(d.user.id));
+    const presence = {};
+    for (const id of ids) presence[id] = presenceOf(userById(id));
+    const voiceIds = servers.flatMap((s) => s.channels.filter((c) => c.type === 'voice').map((c) => c.id)).concat(dms.map((d) => d.id));
+    reply(cb, { user: pubUser(me), me: meInfo(), servers, dms, presence, voice: voiceSnapshot(voiceIds) });
   });
 
   // ----- профиль -----
-  on('profile:update', async ({ username, password }, cb) => {
-    if (username !== undefined) {
-      username = String(username).trim();
+  on('profile:update', async (p, cb) => {
+    if (p.username !== undefined) {
+      const username = String(p.username).trim();
       if (!NAME_RE.test(username)) return reply(cb, { error: 'Ник: 2–24 символа — буквы, цифры, _ . -' });
       if (nameTaken(username, me.id)) return reply(cb, { error: 'Такой ник уже занят' });
       me.username = username;
-      for (const m of voice.values()) for (const st of m.values()) if (st.userId === me.id) st.username = username;
     }
-    if (password !== undefined && password !== '') {
-      if (String(password).length < 6) return reply(cb, { error: 'Пароль — минимум 6 символов' });
-      me.hash = await bcrypt.hash(String(password), 10);
+    if (p.password !== undefined && p.password !== '') {
+      if (String(p.password).length < 6) return reply(cb, { error: 'Пароль — минимум 6 символов' });
+      me.hash = await bcrypt.hash(String(p.password), 10);
+    }
+    if (p.displayName !== undefined) me.displayName = clip(p.displayName, 32);
+    if (p.bio !== undefined) me.bio = String(p.bio ?? '').replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 190);
+    if (p.pronouns !== undefined) me.pronouns = clip(p.pronouns, 24);
+    if (p.color !== undefined) me.color = hexOr(p.color, me.color);
+    if (p.accent !== undefined) me.accent = p.accent ? hexOr(p.accent, null) : null;
+    if (p.ring !== undefined) me.ring = RINGS.includes(p.ring) ? p.ring : 'none';
+    if (p.avatar !== undefined) me.avatar = mediaOr(p.avatar);
+    if (p.nameStyle !== undefined) {
+      const n = p.nameStyle || {};
+      me.nameStyle = NAME_KINDS.includes(n.kind) ? { kind: n.kind, a: hexOr(n.a, me.color), b: hexOr(n.b, '#63d8ff') } : null;
+    }
+    if (p.banner !== undefined) {
+      const b = p.banner || {};
+      me.banner = b.kind === 'image' && mediaOr(b.image)
+        ? { kind: 'image', image: mediaOr(b.image), a: hexOr(b.a, '#2b5cff'), b: hexOr(b.b, '#16c6d6') }
+        : b.kind === 'gradient' ? { kind: 'gradient', a: hexOr(b.a, '#2b5cff'), b: hexOr(b.b, '#16c6d6') } : null;
+    }
+    if (p.customStatus !== undefined) {
+      const c = p.customStatus || {};
+      const text = clip(c.text, 60), emoji = clip(c.emoji, 8);
+      me.customStatus = text || emoji ? { text, emoji } : null;
+    }
+    let presenceChanged = false;
+    if (p.status !== undefined && STATUSES.includes(p.status) && p.status !== me.status) {
+      me.status = p.status;
+      presenceChanged = true;
     }
     db.save();
+    for (const m of voice.values()) for (const st of m.values()) if (st.userId === me.id) Object.assign(st, { username: me.username, displayName: me.displayName || '', color: me.color, avatar: me.avatar || null, ring: me.ring || 'none' });
     const u = pubUser(me);
-    io.to('u:' + me.id).emit('user:updated', u);
-    for (const sid of myServerIds()) io.to('s:' + sid).emit('user:updated', u);
+    emitTo(audienceRooms(me.id), 'user:updated', u);
+    if (presenceChanged) broadcastPresence(me);
     for (const [chId, m] of voice) if ([...m.values()].some((st) => st.userId === me.id)) broadcastVoice(chId);
-    reply(cb, { user: u, me: { email: me.email || null, hasPassword: !!me.hash, google: !!me.googleId } });
+    reply(cb, { user: u, me: meInfo() });
+  });
+
+  on('user:get', ({ userId }, cb) => {
+    const u = userById(userId);
+    if (!u || !canSee(u.id)) return reply(cb, { error: 'Пользователь не найден' });
+    reply(cb, { user: pubUser(u), status: presenceOf(u) });
+  });
+
+  // ----- личные сообщения -----
+  on('dm:open', ({ userId }, cb) => {
+    const other = userById(userId);
+    if (!other || other.id === me.id || !canSee(other.id)) return reply(cb, { error: 'Нельзя написать этому человеку' });
+    let c = dmOf(me.id, other.id);
+    if (!c) {
+      c = { id: uid(), type: 'dm', serverId: null, members: [me.id, other.id], createdAt: Date.now(), lastTs: Date.now() };
+      db.data.channels.push(c);
+      db.save();
+    }
+    reply(cb, { dm: dmView(c, me.id), status: presenceOf(other) });
   });
 
   // ----- серверы -----
@@ -466,13 +641,11 @@ io.on('connection', (socket) => {
     socket.to('u:' + me.id).emit('server:added', view);
     if (fresh) {
       socket.to('s:' + s.id).emit('member:joined', { serverId: s.id, user: pubUser(me) });
-      socket.to('s:' + s.id).emit('presence', { userId: me.id, online: true });
+      socket.to('s:' + s.id).emit('presence', { userId: me.id, status: presenceOf(me) });
     }
-    reply(cb, {
-      server: view,
-      online: view.members.map((u) => u.id).filter((id) => online.has(id)),
-      voice: voiceSnapshot([view]),
-    });
+    const presence = {};
+    for (const u of view.members) presence[u.id] = presenceOf(userById(u.id));
+    reply(cb, { server: view, presence, voice: voiceSnapshot(view.channels.map((c) => c.id)) });
   });
 
   on('server:leave', ({ serverId }, cb) => {
@@ -488,6 +661,17 @@ io.on('connection', (socket) => {
     reply(cb, { ok: true });
   });
 
+  on('server:rename', ({ serverId, name }, cb) => {
+    const s = serverById(serverId);
+    if (!s || s.ownerId !== me.id) return reply(cb, { error: 'Нет прав' });
+    name = String(name || '').trim().slice(0, 40);
+    if (!name) return reply(cb, { error: 'Введи название' });
+    s.name = name;
+    db.save();
+    io.to('s:' + s.id).emit('server:added', serverView(s));
+    reply(cb, { ok: true });
+  });
+
   on('server:delete', ({ serverId }, cb) => {
     const s = serverById(serverId);
     if (!s || s.ownerId !== me.id) return reply(cb, { error: 'Нет прав' });
@@ -498,6 +682,7 @@ io.on('connection', (socket) => {
       if (c.type === 'voice') kickFromVoice(c.id);
     }
     db.data.messages = db.data.messages.filter((m) => !chIds.has(m.channelId));
+    indexMessages();
     db.data.channels = db.data.channels.filter((c) => c.serverId !== s.id);
     db.data.members = db.data.members.filter((m) => m.serverId !== s.id);
     db.data.servers = db.data.servers.filter((x) => x.id !== s.id);
@@ -529,6 +714,7 @@ io.on('connection', (socket) => {
     if (!s || s.ownerId !== me.id) return reply(cb, { error: 'Нет прав' });
     if (c.type === 'voice') kickFromVoice(c.id);
     db.data.messages = db.data.messages.filter((m) => m.channelId !== c.id);
+    indexMessages();
     db.data.channels = db.data.channels.filter((x) => x.id !== c.id);
     db.save();
     io.to('s:' + s.id).emit('channel:deleted', { serverId: s.id, channelId: c.id });
@@ -537,18 +723,29 @@ io.on('connection', (socket) => {
 
   on('channel:history', ({ channelId, before }, cb) => {
     const c = accessChannel(channelId);
-    if (!c || c.type !== 'text') return reply(cb, { error: 'Нет доступа' });
+    if (!c || c.type === 'voice') return reply(cb, { error: 'Нет доступа' });
     const list = db.data.messages.filter((m) => m.channelId === c.id && (!before || m.ts < before)).slice(-50);
     reply(cb, { messages: list.map(msgView) });
   });
 
   // ----- сообщения -----
   const rate = { t: 0, n: 0 };
-  on('message:send', ({ channelId, text }, cb) => {
+  const findMsg = (id) => {
+    const m = msgIndex.get(id);
+    const c = m && accessChannel(m.channelId);
+    return m && c ? { m, c } : null;
+  };
+  const canModerate = (c) => c.type !== 'dm' && serverById(c.serverId)?.ownerId === me.id;
+
+  on('message:send', ({ channelId, text, replyTo, attachments }, cb) => {
     const c = accessChannel(channelId);
-    if (!c || c.type !== 'text') return reply(cb, { error: 'Нет доступа' });
+    if (!c || c.type === 'voice') return reply(cb, { error: 'Нет доступа' });
     text = String(text || '').replace(/\r\n/g, '\n').trim();
-    if (!text) return reply(cb, { error: 'Пустое сообщение' });
+    const att = (Array.isArray(attachments) ? attachments : [])
+      .slice(0, 6)
+      .map((a) => ({ id: mediaOr(a?.id), w: Math.min(8000, Math.max(1, a?.w | 0)), h: Math.min(8000, Math.max(1, a?.h | 0)) }))
+      .filter((a) => a.id);
+    if (!text && !att.length) return reply(cb, { error: 'Пустое сообщение' });
     if (text.length > 2000) return reply(cb, { error: 'Максимум 2000 символов' });
     const now = Date.now();
     if (now - rate.t > 3000) {
@@ -556,58 +753,98 @@ io.on('connection', (socket) => {
       rate.n = 0;
     }
     if (++rate.n > 8) return reply(cb, { error: 'Слишком быстро, подожди секунду' });
+    const r = replyTo && msgIndex.get(replyTo);
     const m = { id: uid(), channelId: c.id, userId: me.id, text, ts: now };
+    if (r && r.channelId === c.id) m.replyTo = r.id;
+    if (att.length) m.attachments = att;
     db.data.messages.push(m);
+    msgIndex.set(m.id, m);
+    if (c.type === 'dm') {
+      const fresh = !c.lastTs || c.lastTs === c.createdAt;
+      c.lastTs = now;
+      // собеседник мог ещё не видеть эту переписку
+      if (fresh) for (const x of c.members) if (x !== me.id) io.to('u:' + x).emit('dm:added', dmView(c, x));
+    }
     db.save();
-    io.to('s:' + c.serverId).emit('message', msgView(m));
+    emitTo(channelRooms(c), 'message', msgView(m));
     reply(cb, { ok: true, id: m.id });
   });
 
-  on('message:delete', ({ id }, cb) => {
-    const i = db.data.messages.findIndex((m) => m.id === id);
-    if (i < 0) return reply(cb, { error: 'Сообщение не найдено' });
-    const m = db.data.messages[i];
-    const c = channelById(m.channelId);
-    const s = c && serverById(c.serverId);
-    if (!s || !isMember(s.id, me.id) || (m.userId !== me.id && s.ownerId !== me.id)) return reply(cb, { error: 'Нет прав' });
-    db.data.messages.splice(i, 1);
+  on('message:edit', ({ id, text }, cb) => {
+    const f = findMsg(id);
+    if (!f || f.m.userId !== me.id) return reply(cb, { error: 'Нет прав' });
+    text = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!text && !f.m.attachments?.length) return reply(cb, { error: 'Пустое сообщение' });
+    if (text.length > 2000) return reply(cb, { error: 'Максимум 2000 символов' });
+    if (text === f.m.text) return reply(cb, { ok: true });
+    f.m.text = text;
+    f.m.editedAt = Date.now();
     db.save();
-    io.to('s:' + s.id).emit('message:deleted', { id, channelId: c.id });
+    emitTo(channelRooms(f.c), 'message:updated', msgView(f.m));
+    reply(cb, { ok: true });
+  });
+
+  on('message:react', ({ id, emoji }, cb) => {
+    const f = findMsg(id);
+    emoji = clip(emoji, 16);
+    if (!f || !emoji) return reply(cb, { error: 'Нет доступа' });
+    const r = (f.m.reactions = f.m.reactions || {});
+    const list = r[emoji] || [];
+    if (list.includes(me.id)) r[emoji] = list.filter((x) => x !== me.id);
+    else {
+      if (!list.length && Object.keys(r).length >= 20) return reply(cb, { error: 'Слишком много разных реакций' });
+      r[emoji] = list.concat(me.id);
+    }
+    if (!r[emoji].length) delete r[emoji];
+    db.save();
+    emitTo(channelRooms(f.c), 'message:updated', msgView(f.m));
+    reply(cb, { ok: true });
+  });
+
+  on('message:delete', ({ id }, cb) => {
+    const f = findMsg(id);
+    if (!f || (f.m.userId !== me.id && !canModerate(f.c))) return reply(cb, { error: 'Нет прав' });
+    const i = db.data.messages.indexOf(f.m);
+    if (i >= 0) db.data.messages.splice(i, 1);
+    msgIndex.delete(id);
+    db.save();
+    emitTo(channelRooms(f.c), 'message:deleted', { id, channelId: f.c.id });
     reply(cb, { ok: true });
   });
 
   on('typing', ({ channelId }) => {
     const c = accessChannel(channelId);
-    if (c) socket.to('s:' + c.serverId).emit('typing', { channelId: c.id, user: pubUser(me) });
+    if (!c) return;
+    let t = socket;
+    for (const r of channelRooms(c)) t = t.to(r);
+    t.emit('typing', { channelId: c.id, user: pubUser(me) });
   });
 
-  // ----- голос -----
+  // ----- голос (голосовые каналы и звонки в личке) -----
   on('voice:join', ({ channelId, muted }, cb) => {
     const c = accessChannel(channelId);
-    if (!c || c.type !== 'voice') return reply(cb, { error: 'Нет доступа' });
+    if (!c || (c.type !== 'voice' && c.type !== 'dm')) return reply(cb, { error: 'Нет доступа' });
     leaveVoice(socket);
     const peers = voiceList(c.id);
     if (peers.length >= MAX_VOICE) return reply(cb, { error: `Канал заполнен (максимум ${MAX_VOICE})` });
-    const st = {
-      socketId: socket.id,
-      userId: me.id,
-      username: me.username,
-      color: me.color,
-      muted: !!muted,
-      deafened: false,
-      video: false,
-      screen: false,
-    };
+    const st = voiceState(socket, me, muted);
     if (!voice.has(c.id)) voice.set(c.id, new Map());
     voice.get(c.id).set(socket.id, st);
     voiceOf.set(socket.id, c.id);
     socket.to('v:' + c.id).emit('voice:peer-joined', st);
     socket.join('v:' + c.id);
     broadcastVoice(c.id);
+    // звонок в личке: показать собеседнику входящий вызов
+    if (c.type === 'dm' && !peers.length) for (const x of c.members) if (x !== me.id) io.to('u:' + x).emit('call:ring', { channelId: c.id, from: pubUser(me) });
     reply(cb, { peers });
   });
 
   on('voice:leave', () => leaveVoice(socket));
+
+  on('call:decline', ({ channelId }) => {
+    const c = accessChannel(channelId);
+    if (c?.type === 'dm') for (const x of c.members) if (x !== me.id) io.to('u:' + x).emit('call:declined', { channelId: c.id, by: pubUser(me) });
+  });
 
   on('voice:update', (p) => {
     const chId = voiceOf.get(socket.id);
@@ -636,7 +873,7 @@ io.on('connection', (socket) => {
     const n = (online.get(me.id) || 1) - 1;
     if (n <= 0) {
       online.delete(me.id);
-      for (const sid of myServerIds()) io.to('s:' + sid).emit('presence', { userId: me.id, online: false });
+      broadcastPresence(me);
     } else online.set(me.id, n);
   });
 });
@@ -647,6 +884,9 @@ const HOSTED_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL ||
 db.init()
   .then(() => {
     SECRET = loadSecret();
+    indexMessages();
+    // старые аккаунты: статус по умолчанию
+    for (const u of db.data.users) if (!u.status) u.status = 'online';
     server.listen(PORT, () => {
       console.log(`\n  Волна запущена: http://localhost:${PORT}`);
       if (HOSTED_URL) return startHosted();

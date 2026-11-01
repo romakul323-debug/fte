@@ -121,7 +121,7 @@ function renderSidebar() {
     const st = S.voice[c.id] || [];
     h += `<button class="ch ${c.id === S.channelId ? 'active' : ''} ${call?.channelId === c.id ? 'connected' : ''}" data-ch="${c.id}">${ICON.speaker}<span>${esc(c.name)}</span>${st.length ? `<em class="cnt">${st.length}</em>` : ''}</button>`;
     if (st.length)
-      h += `<div class="vc-users">${st.map((v) => { const u = userOf({ id: v.userId, ...v }); return `<div class="vc-user ${meters.get(v.socketId)?.speaking ? 'speaking' : ''}" data-speak="${v.socketId}" data-user="${v.userId}">${avatar(u, 'xs', { ring: false })}<span>${esc(dname(u))}</span>${v.video ? `<b class="tag">${v.screen ? 'ЭКРАН' : 'КАМ'}</b>` : ''}${v.deafened ? ICON.headOff : v.muted ? ICON.micOff : ''}</div>`; }).join('')}</div>`;
+      h += `<div class="vc-users">${st.map((v) => { const u = userOf({ id: v.userId, ...v }); return `<div class="vc-user ${speakingNow(v.socketId) ? 'speaking' : ''}" data-speak="${v.socketId}" data-user="${v.userId}">${avatar(u, 'xs', { ring: false })}<span>${esc(dname(u))}</span>${v.video ? `<b class="tag">${v.screen ? 'ЭКРАН' : 'КАМ'}</b>` : ''}${v.deafened ? ICON.headOff : v.muted ? ICON.micOff : ''}</div>`; }).join('')}</div>`;
   }
   $('#channels').innerHTML = h;
   renderVoicePanel();
@@ -319,7 +319,7 @@ function renderTiles() {
   for (const v of st) {
     const u = userOf({ id: v.userId, ...v });
     const t = document.createElement('div');
-    t.className = 'tile' + (meters.get(v.socketId)?.speaking ? ' speaking' : '') + (S.focus === v.socketId ? ' focus' : '');
+    t.className = 'tile' + (speakingNow(v.socketId) ? ' speaking' : '') + (S.focus === v.socketId ? ' focus' : '');
     t.dataset.speak = v.socketId;
     t.dataset.tile = v.socketId;
     t.style.setProperty('--tilebg', `radial-gradient(80% 70% at 50% 40%, ${safeColor(u.accent || u.color)}33, transparent 70%)`);
@@ -333,7 +333,7 @@ function renderTiles() {
     } else t.insertAdjacentHTML('beforeend', avatar(u, 'lg'));
     if (inThis && v.socketId !== call.selfId) {
       const p = peers.get(v.socketId);
-      const pst = p?.pc.connectionState;
+      const pst = p?.pc?.connectionState;
       if (p?.relay) t.insertAdjacentHTML('beforeend', '<div class="tile-warn soft">через сервер</div>');
       else if (pst === 'failed' || pst === 'disconnected') t.insertAdjacentHTML('beforeend', '<div class="tile-warn">восстанавливаю…</div>');
       else if (pst === 'new' || pst === 'connecting') t.insertAdjacentHTML('beforeend', '<div class="tile-warn soft">соединяю…</div>');
@@ -759,7 +759,7 @@ function tabVoice(body) {
   });
   startMicTest((d) => {
     if (!$('#mtLvl')) return;
-    if (!d) { $('#mtHint').textContent = 'Нет доступа к микрофону.'; return; }
+    if (!d) { $('#mtHint').textContent = call?.native ? 'Во время звонка проверка недоступна — шумодав уже работает в звонке.' : 'Нет доступа к микрофону.'; return; }
     $('#mtLvl').style.width = pos(d.level) + '%';
     $('#mtLvl').classList.toggle('closed', !d.open);
     if (prefs.autoSens) $('#mtThr').style.left = pos(d.thr) + '%';

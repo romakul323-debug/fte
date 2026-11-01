@@ -399,6 +399,29 @@ app.get('/api/config', (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: true }, maxHttpBufferSize: 1e6, pingInterval: 20000, pingTimeout: 25000 });
 
+// соединение для звука из приложения на iPhone
+const nativeWss = new (require('ws').WebSocketServer)({ noServer: true, maxPayload: 8192, perMessageDeflate: false });
+server.on('upgrade', (req, sock, head) => {
+  let u;
+  try { u = new URL(req.url, 'http://x'); } catch { return; }
+  if (u.pathname !== '/nv') return;
+  const leg = legs.get(u.searchParams.get('t') || '');
+  if (!leg || leg.dead) {
+    sock.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    return;
+  }
+  nativeWss.handleUpgrade(req, sock, head, (ws) => attachLeg(leg, ws));
+});
+setInterval(() => {
+  for (const leg of legByPub.values()) {
+    const ws = leg.ws;
+    if (!ws) continue;
+    if (!ws.isAlive) { try { ws.terminate(); } catch {} continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch {}
+  }
+}, 15000).unref();
+
 io.use((socket, next) => {
   try {
     const { id } = jwt.verify(socket.handshake.auth?.token, SECRET);
@@ -416,6 +439,13 @@ const voice = new Map(); // channelId -> Map(socketId -> состояние)
 const voiceOf = new Map(); // socketId -> channelId
 
 const voiceList = (channelId) => [...(voice.get(channelId)?.values() || [])];
+
+// «Нативный звук» (приложение на iPhone): звук звонка идёт не через WebView, а через отдельное
+// WebSocket-соединение из Swift — так iOS не глушит звонок, когда приложение свёрнуто.
+const legs = new Map(); // секрет -> нога звонка
+const legByPub = new Map(); // публичный id ('n:…') -> нога
+const legOf = new Map(); // socketId WebView -> нога
+const voiceKey = (socket) => legOf.get(socket.id)?.pub || socket.id;
 
 // статус, который видят другие: невидимка и отключённые — «не в сети»
 const presenceOf = (u) => (!u || !online.has(u.id) ? 'offline' : u.status === 'invisible' ? 'offline' : STATUSES.includes(u.status) ? u.status : 'online');
@@ -439,9 +469,9 @@ function broadcastPresence(u) {
   emitTo(audienceRooms(u.id), 'presence', { userId: u.id, status: presenceOf(u) });
 }
 
-function voiceState(socket, u, muted) {
+function voiceState(socket, u, muted, key) {
   return {
-    socketId: socket.id,
+    socketId: key || socket.id,
     userId: u.id,
     username: u.username,
     displayName: u.displayName || '',
@@ -460,23 +490,87 @@ function broadcastVoice(channelId) {
   if (ch) emitTo(channelRooms(ch), 'voice:state', { channelId, states: voiceList(channelId) });
 }
 
+function removeVoiceEntry(chId, key) {
+  const m = voice.get(chId);
+  if (m) {
+    m.delete(key);
+    if (!m.size) voice.delete(chId);
+  }
+  io.to('v:' + chId).emit('voice:peer-left', { socketId: key });
+  broadcastVoice(chId);
+}
+
 function leaveVoice(socket) {
   const chId = voiceOf.get(socket.id);
   if (!chId) return;
   voiceOf.delete(socket.id);
-  const m = voice.get(chId);
-  if (m) {
-    m.delete(socket.id);
-    if (!m.size) voice.delete(chId);
-  }
+  const leg = legOf.get(socket.id);
+  if (leg) return dropLeg(leg);
   socket.leave('v:' + chId);
-  io.to('v:' + chId).emit('voice:peer-left', { socketId: socket.id });
-  broadcastVoice(chId);
+  removeVoiceEntry(chId, socket.id);
+}
+
+function dropLeg(leg) {
+  if (leg.dead) return;
+  leg.dead = true;
+  clearTimeout(leg.gone);
+  legs.delete(leg.secret);
+  legByPub.delete(leg.pub);
+  if (leg.webSid && legOf.get(leg.webSid) === leg) {
+    legOf.delete(leg.webSid);
+    voiceOf.delete(leg.webSid);
+  }
+  try { leg.ws?.close(4000, 'left'); } catch {}
+  removeVoiceEntry(leg.chId, leg.pub);
+}
+
+// звук для нативных участников канала: [длина id][id отправителя][μ-law]
+function toLegs(chId, from, data) {
+  let frame = null;
+  for (const leg of legByPub.values()) {
+    if (leg.chId !== chId || leg.pub === from || !leg.ws || leg.ws.readyState !== 1) continue;
+    if (leg.ws.bufferedAmount > 48000) continue; // отстаёт — пропускаем кусочек, как volatile
+    if (!frame) {
+      const id = Buffer.from(from);
+      frame = Buffer.concat([Buffer.from([id.length]), id, Buffer.from(data)]);
+    }
+    leg.ws.send(frame, { binary: true });
+  }
+}
+
+function attachLeg(leg, ws) {
+  if (leg.dead) return ws.close(4000, 'left');
+  if (leg.ws && leg.ws !== ws) try { leg.ws.terminate(); } catch {}
+  leg.ws = ws;
+  ws.isAlive = true;
+  clearTimeout(leg.gone);
+  ws.on('pong', () => (ws.isAlive = true));
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary || leg.dead || !data.length || data.length > 4096) return;
+    const st = voice.get(leg.chId)?.get(leg.pub);
+    if (!st || st.muted) return;
+    io.to('v:' + leg.chId).volatile.emit('voice:audio', { from: leg.pub, data });
+    toLegs(leg.chId, leg.pub, data);
+  });
+  ws.on('close', () => {
+    if (leg.ws !== ws) return;
+    leg.ws = null;
+    // даём 25 секунд на переподключение (смена сети, туннель)
+    leg.gone = setTimeout(() => dropLeg(leg), 25000);
+  });
+  ws.on('error', () => {});
 }
 
 function kickFromVoice(channelId, userId) {
   for (const st of voiceList(channelId)) {
     if (userId && st.userId !== userId) continue;
+    const leg = legByPub.get(st.socketId);
+    if (leg) {
+      const sk = leg.webSid && io.sockets.sockets.get(leg.webSid);
+      dropLeg(leg);
+      sk?.emit('voice:kicked');
+      continue;
+    }
     const sk = io.sockets.sockets.get(st.socketId);
     if (sk) {
       leaveVoice(sk);
@@ -821,22 +915,49 @@ io.on('connection', (socket) => {
   });
 
   // ----- голос (голосовые каналы и звонки в личке) -----
-  on('voice:join', ({ channelId, muted }, cb) => {
+  on('voice:join', ({ channelId, muted, native }, cb) => {
     const c = accessChannel(channelId);
     if (!c || (c.type !== 'voice' && c.type !== 'dm')) return reply(cb, { error: 'Нет доступа' });
     leaveVoice(socket);
     const peers = voiceList(c.id);
     if (peers.length >= MAX_VOICE) return reply(cb, { error: `Канал заполнен (максимум ${MAX_VOICE})` });
-    const st = voiceState(socket, me, muted);
+    let leg = null;
+    if (native) {
+      leg = { secret: crypto.randomBytes(18).toString('hex'), pub: 'n:' + crypto.randomBytes(6).toString('hex'), userId: me.id, chId: c.id, webSid: socket.id, ws: null, dead: false };
+      legs.set(leg.secret, leg);
+      legByPub.set(leg.pub, leg);
+      legOf.set(socket.id, leg);
+      // приложение так и не подключило звук — убираем из канала
+      leg.gone = setTimeout(() => dropLeg(leg), 25000);
+    }
+    const st = voiceState(socket, me, muted, leg?.pub);
+    if (leg) st.native = true;
     if (!voice.has(c.id)) voice.set(c.id, new Map());
-    voice.get(c.id).set(socket.id, st);
+    voice.get(c.id).set(st.socketId, st);
     voiceOf.set(socket.id, c.id);
-    socket.to('v:' + c.id).emit('voice:peer-joined', st);
-    socket.join('v:' + c.id);
+    io.to('v:' + c.id).emit('voice:peer-joined', st);
+    // нативному участнику WebRTC-сигналы и звук через socket.io не нужны — звук идёт по своему соединению
+    if (!leg) socket.join('v:' + c.id);
     broadcastVoice(c.id);
     // звонок в личке: показать собеседнику входящий вызов
     if (c.type === 'dm' && !peers.length) for (const x of c.members) if (x !== me.id) io.to('u:' + x).emit('call:ring', { channelId: c.id, from: pubUser(me) });
-    reply(cb, { peers });
+    reply(cb, leg ? { peers, selfId: leg.pub, leg: leg.secret } : { peers });
+  });
+
+  // WebView переподключился (или перезагрузился), а звук в приложении всё это время шёл — возвращаемся к той же ноге
+  on('voice:reattach', ({ leg: secret }, cb) => {
+    const leg = legs.get(String(secret || ''));
+    if (!leg || leg.dead || leg.userId !== me.id) return reply(cb, { error: 'gone' });
+    if (leg.webSid && leg.webSid !== socket.id) {
+      legOf.delete(leg.webSid);
+      voiceOf.delete(leg.webSid);
+    }
+    leaveVoice(socket);
+    leg.webSid = socket.id;
+    legOf.set(socket.id, leg);
+    voiceOf.set(socket.id, leg.chId);
+    const st = voice.get(leg.chId)?.get(leg.pub);
+    reply(cb, { channelId: leg.chId, selfId: leg.pub, muted: !!st?.muted, deafened: !!st?.deafened });
   });
 
   on('voice:leave', () => leaveVoice(socket));
@@ -848,7 +969,7 @@ io.on('connection', (socket) => {
 
   on('voice:update', (p) => {
     const chId = voiceOf.get(socket.id);
-    const st = chId && voice.get(chId)?.get(socket.id);
+    const st = chId && voice.get(chId)?.get(voiceKey(socket));
     if (!st) return;
     for (const k of ['muted', 'deafened', 'video', 'screen']) if (k in p) st[k] = !!p[k];
     broadcastVoice(chId);
@@ -857,8 +978,9 @@ io.on('connection', (socket) => {
   // запасной путь для голоса: кусочки звука пересылаются остальным в канале
   socket.on('voice:audio', (data) => {
     const chId = voiceOf.get(socket.id);
-    if (!chId || !data || data.byteLength > 4096) return;
+    if (!chId || !data || data.byteLength > 4096 || legOf.has(socket.id)) return;
     socket.volatile.to('v:' + chId).emit('voice:audio', { from: socket.id, data });
+    toLegs(chId, socket.id, data);
   });
 
   // пересылка WebRTC-сигналов только между участниками одного канала
@@ -869,7 +991,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    leaveVoice(socket);
+    // WebView уснул (iPhone, приложение свёрнуто), а звук в приложении работает — остаёмся в звонке
+    const leg = legOf.get(socket.id);
+    if (leg && leg.ws) {
+      legOf.delete(socket.id);
+      voiceOf.delete(socket.id);
+      if (leg.webSid === socket.id) leg.webSid = null;
+    } else leaveVoice(socket);
     const n = (online.get(me.id) || 1) - 1;
     if (n <= 0) {
       online.delete(me.id);

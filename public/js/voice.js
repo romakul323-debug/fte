@@ -74,6 +74,111 @@ const nativeCall = () => {
   return nativeCallPlugin;
 };
 
+/* --- приложение на iPhone: звук звонка ведёт нативный код (iOS не глушит его в фоне) --- */
+const isIOSApp = isNative && window.Capacitor?.getPlatform?.() === 'ios';
+let nativeAudioOk = null, nativeBound = false, nativeChecked = false;
+const nativeSpeaking = new Set();
+const speakingNow = (id) => !!(meters.get(id)?.speaking || nativeSpeaking.has(id));
+async function hasNativeAudio() {
+  if (!isIOSApp || !nativeCall()) return false;
+  if (nativeAudioOk !== null) return nativeAudioOk;
+  try {
+    const r = await Promise.race([nativeCall().caps(), new Promise((_, no) => setTimeout(no, 2000))]);
+    nativeAudioOk = !!r?.audio;
+  } catch { nativeAudioOk = false; }
+  if (nativeAudioOk) bindNativeEvents();
+  return nativeAudioOk;
+}
+function bindNativeEvents() {
+  if (nativeBound || !nativeCall()) return;
+  nativeBound = true;
+  const pl = nativeCall();
+  pl.addListener('levels', (d) => {
+    const now = new Set(d?.ids || []);
+    if (d?.me && call?.selfId) now.add(call.selfId);
+    for (const id of new Set([...now, ...nativeSpeaking])) {
+      const on = now.has(id);
+      if (on === nativeSpeaking.has(id)) continue;
+      if (on) nativeSpeaking.add(id); else nativeSpeaking.delete(id);
+      $$(`[data-speak="${CSS.escape(id)}"]`).forEach((el) => el.classList.toggle('speaking', on));
+    }
+  });
+  pl.addListener('ended', () => {
+    if (!call?.native) return;
+    socket?.emit('voice:leave');
+    cleanupCall(true);
+    toast('Звонок прервался');
+  });
+}
+const nativeUrl = (leg) => ((typeof API !== 'undefined' && API) || location.origin).replace(/^http/i, 'ws') + '/nv?t=' + encodeURIComponent(leg);
+function nativeVols() {
+  const vols = {};
+  for (const s of S.voice[call?.channelId] || [])
+    if (s.socketId !== call.selfId) vols[s.socketId] = Math.max(0, Math.min(1, (prefs.vol[s.userId] != null ? prefs.vol[s.userId] : 1) * prefs.outVol));
+  return vols;
+}
+function syncNative() {
+  if (!call?.native || !call.started) return;
+  nativeCall().setState({ muted: call.muted, deafened: call.deafened, gate: gateParams(), vols: nativeVols() }).catch(() => {});
+}
+function joinNativeVoice(chId, opts) {
+  hideRing();
+  const ch = findChannel(chId);
+  if (ch?.type === 'dm' && S.channelId === chId) { S.dmView = 'call'; renderMain(); }
+  const me = (call = { native: true, started: false, channelId: chId, selfId: null, leg: null, mic: true, muted: !!opts.muted, deafened: !!opts.deafened, prevMuted: false, video: false, screen: false, since: Date.now() });
+  socket.emit('voice:join', { channelId: chId, muted: me.muted, native: true }, async (res) => {
+    if (call !== me) { if (res?.leg) socket.emit('voice:leave'); return; }
+    if (res?.error || !res?.leg) { toast(res?.error || 'Не получилось подключиться'); cleanupCall(); return; }
+    me.selfId = res.selfId;
+    me.leg = res.leg;
+    renderSidebar();
+    renderMain();
+    let r;
+    try {
+      r = await nativeCall().startAudio({ url: nativeUrl(res.leg), leg: res.leg, channelId: chId, selfId: res.selfId, title: ch?.name || 'Голосовой канал', muted: me.muted, deafened: me.deafened, gate: gateParams(), vols: nativeVols() });
+    } catch (e) {
+      if (call === me) { toast('Не удалось включить звук звонка'); leaveVoice(); }
+      return;
+    }
+    if (call !== me) { nativeCall().stopAudio().catch(() => {}); return; }
+    me.started = true;
+    if (r?.nomic) {
+      me.muted = true;
+      me.mic = null;
+      toast('Нет доступа к микрофону — разреши его: Настройки iPhone → Волна → Микрофон');
+    }
+    if (me.muted || me.deafened) socket.emit('voice:update', { muted: me.muted, deafened: me.deafened });
+    syncNative();
+    renderSidebar();
+    renderMain();
+  });
+  renderSidebar();
+}
+// WebView проснулся/переподключился — звук всё это время шёл в приложении, просто возвращаем интерфейс к звонку
+function reattachNative(me) {
+  socket.emit('voice:reattach', { leg: me.leg }, (res) => {
+    if (call !== me) return;
+    if (res?.error) {
+      nativeCall().stopAudio().catch(() => {});
+      cleanupCall(true);
+      toast('Звонок завершился');
+      return;
+    }
+    me.detached = false;
+    me.selfId = res.selfId;
+    renderSidebar();
+    renderMain();
+  });
+}
+async function restoreNativeCall() {
+  if (!(await hasNativeAudio()) || call) return;
+  let st = null;
+  try { st = await nativeCall().status(); } catch {}
+  if (!st?.active || !st.leg || call) return;
+  const me = (call = { native: true, started: true, channelId: st.channelId, selfId: st.selfId, leg: st.leg, mic: true, muted: !!st.muted, deafened: !!st.deafened, prevMuted: false, video: false, screen: false, since: Date.now() });
+  reattachNative(me);
+}
+
 /* --- микрофон → шумодав → отправка --- */
 async function buildPipeline(me) {
   if (!me.mic) return;
@@ -117,6 +222,7 @@ function tuneSender(sender) {
 async function joinVoice(chId, opts = {}) {
   if (call?.channelId === chId) return;
   if (call) leaveVoice();
+  if (await hasNativeAudio()) { if (!call) joinNativeVoice(chId, opts); return; }
   if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) return toast('Звонки работают только по HTTPS');
   hideRing();
   const ch = findChannel(chId);
@@ -141,7 +247,7 @@ async function joinVoice(chId, opts = {}) {
     startRelay(me);
     nativeCall()?.start({ title: ch?.name || 'Голосовой канал' }).catch(() => {});
     // соединение начинает тот, кто вошёл; остальные ждут его предложения — так не бывает «встречных» предложений
-    for (const p of res.peers) ensurePeer(p.socketId, true);
+    for (const p of res.peers) ensurePeer(p.socketId, true, p.native);
     me.watch = setInterval(() => watchdog(me), 1500);
     sfx('join');
     renderSidebar();
@@ -152,8 +258,15 @@ async function joinVoice(chId, opts = {}) {
 
 function signal(to, data) { socket.emit('voice:signal', { to, data }); }
 
-function ensurePeer(id, initiator) {
+function ensurePeer(id, initiator, native) {
   if (peers.has(id)) return peers.get(id);
+  if (native) {
+    // участник из приложения на iPhone: звук только через сервер, без прямого соединения
+    const p = { id, native: true, pc: null, created: Date.now(), relay: true, badSince: 0, chain: Promise.resolve(), audioEl: document.createElement('audio'), videoEl: document.createElement('video') };
+    peers.set(id, p);
+    applyPeerVolume(p);
+    return p;
+  }
   const pc = new RTCPeerConnection({ iceServers: S.ice });
   const p = { id, pc, created: Date.now(), relay: false, polite: !initiator, waitOffer: !initiator, chain: Promise.resolve(), makingOffer: false, ignoreOffer: false, badSince: 0, lastRestart: 0, videoSender: null, audioEl: document.createElement('audio'), videoEl: document.createElement('video') };
   p.audioEl.autoplay = true;
@@ -205,6 +318,7 @@ function ensurePeer(id, initiator) {
   return p;
 }
 function restartPeer(p) {
+  if (!p.pc) return;
   if (Date.now() - p.lastRestart < 8000) return;
   p.lastRestart = Date.now();
   try { p.pc.restartIce(); } catch {}
@@ -213,6 +327,7 @@ function restartPeer(p) {
 // сигналы обрабатываем строго по очереди: иначе кандидаты маршрута могут обогнать описание соединения
 function onSignal(from, data) {
   const p = ensurePeer(from, false);
+  if (!p.pc) return;
   p.chain = p.chain.then(() => handleSignal(p, data)).catch(() => {});
 }
 async function handleSignal(p, { description, candidate }) {
@@ -239,7 +354,7 @@ function closePeer(id) {
   const p = peers.get(id);
   if (!p) return;
   clearTimeout(p.waitTimer);
-  try { p.pc.close(); } catch {}
+  try { p.pc?.close(); } catch {}
   p.audioEl.srcObject = null;
   p.audioEl.remove();
   p.videoEl.srcObject = null;
@@ -259,6 +374,15 @@ function leaveVoice() {
 
 function cleanupCall(keepService) {
   if (!call) return;
+  if (call.native) {
+    if (!keepService) nativeCall()?.stopAudio().catch(() => {});
+    for (const id of nativeSpeaking) $$(`[data-speak="${CSS.escape(id)}"]`).forEach((el) => el.classList.remove('speaking'));
+    nativeSpeaking.clear();
+    call = null;
+    renderSidebar();
+    renderMain();
+    return;
+  }
   if (!keepService) { nativeCall()?.stop().catch(() => {}); keepAlive.stop(); }
   for (const id of [...peers.keys()]) closePeer(id);
   clearInterval(call.watch);
@@ -275,12 +399,15 @@ function cleanupCall(keepService) {
 
 // связь с сервером пропала — запоминаем звонок и вернёмся в него, когда она появится
 function onSocketLost() {
+  if (call?.native) { call.detached = true; return; } // звук в приложении продолжает идти сам
   if (!call) return;
   rejoin = { channelId: call.channelId, muted: call.muted, deafened: call.deafened };
   cleanupCall(true);
   toast('Связь пропала — верну в звонок, как только она появится');
 }
 function onSocketBack() {
+  if (call?.native) return reattachNative(call);
+  if (!call && !rejoin && isIOSApp && !nativeChecked) { nativeChecked = true; restoreNativeCall(); }
   if (!rejoin || call) return;
   const r = rejoin;
   rejoin = null;
@@ -293,11 +420,12 @@ function pushVoiceState() {
   call.capture?.port.postMessage({ on: !call.muted });
   call.gate?.port.postMessage({ muted: call.muted });
   socket.emit('voice:update', { muted: call.muted, deafened: call.deafened, video: call.video, screen: call.screen });
+  syncNative();
   renderVoicePanel();
   if (S.channelId === call.channelId) renderTiles();
 }
 function setMic(on) {
-  if (!call) return;
+  if (!call || call.native) return;
   call.mic?.getAudioTracks().forEach((t) => (t.enabled = on));
   if (call.procTrack) call.procTrack.enabled = on;
 }
@@ -309,7 +437,7 @@ function toggleMute() {
   setMic(!call.muted);
   pushVoiceState();
 }
-function applyDeafen() { for (const p of peers.values()) applyPeerVolume(p); }
+function applyDeafen() { if (call?.native) return syncNative(); for (const p of peers.values()) applyPeerVolume(p); }
 function toggleDeafen() {
   if (!call) return;
   call.deafened = !call.deafened;
@@ -333,10 +461,13 @@ function setUserVolume(userId, v) {
   prefs.vol[userId] = v;
   savePrefs();
   for (const p of peers.values()) applyPeerVolume(p);
+  syncNative();
 }
 
+const nativeNoVideo = () => toast('В приложении на iPhone пока только голос. Видео — в браузере или на ПК');
 async function toggleCamera() {
   if (!call) return;
+  if (call.native) return nativeNoVideo();
   if (call.video && !call.screen) return setVideo(null, false);
   try {
     const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } });
@@ -345,6 +476,7 @@ async function toggleCamera() {
 }
 async function toggleScreen() {
   if (!call) return;
+  if (call.native) return nativeNoVideo();
   if (call.screen) return setVideo(null, false);
   try {
     const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false });
@@ -360,6 +492,7 @@ function setVideo(track, isScreen) {
   call.video = !!track;
   call.screen = !!track && isScreen;
   for (const p of peers.values()) {
+    if (!p.pc) continue;
     if (p.videoSender) p.videoSender.replaceTrack(track).catch(() => {});
     else if (track) p.videoSender = p.pc.addTrack(track);
   }
@@ -394,8 +527,8 @@ async function startRelay(me) {
     if (call !== me) return;
     let changed = false;
     for (const p of peers.values()) {
-      const ok = p.pc.connectionState === 'connected';
-      const want = !ok && Date.now() - p.created > 5000;
+      const ok = p.pc?.connectionState === 'connected';
+      const want = p.native || (!ok && Date.now() - p.created > 5000);
       if (want !== p.relay) { p.relay = want; changed = true; }
     }
     me.relaySend = [...peers.values()].some((p) => p.relay);
@@ -513,6 +646,7 @@ function showAudioUnlock() {
 let micTest = null;
 async function startMicTest(onLevel) {
   stopMicTest();
+  if (call?.native) { onLevel(null); return; }
   const t = (micTest = { onLevel });
   ensureCtx();
   if (call?.gate) {
@@ -541,6 +675,7 @@ function stopMicTest() {
   if (!t.shared) { try { t.src?.disconnect(); t.node?.disconnect(); } catch {} t.stream?.getTracks().forEach((x) => x.stop()); }
 }
 function applyVoicePrefs() {
+  syncNative();
   call?.gate?.port.postMessage(gateParams());
   if (micTest?.node && !micTest.shared) micTest.node.port.postMessage(gateParams());
   for (const p of peers.values()) applyPeerVolume(p);
@@ -585,15 +720,16 @@ function bindVoiceSocket() {
     if (call?.channelId === channelId) {
       if (states.length > before && before) sfx('join');
       for (const p of peers.values()) applyPeerVolume(p);
+      syncNative();
     }
     if (ringing?.channelId === channelId && !states.length) hideRing();
     renderSidebar();
     if (S.channelId === channelId) { renderTiles(); renderHeader(); }
   });
-  socket.on('voice:peer-joined', (st) => { if (call) ensurePeer(st.socketId); });
+  socket.on('voice:peer-joined', (st) => { if (call && !call.native && st.socketId !== call.selfId) ensurePeer(st.socketId, false, st.native); });
   socket.on('voice:peer-left', ({ socketId }) => { if (peers.has(socketId)) sfx('leave'); closePeer(socketId); });
-  socket.on('voice:signal', ({ from, data }) => { if (call) onSignal(from, data); });
-  socket.on('voice:audio', ({ from, data }) => { if (call) playRelay(from, data); });
+  socket.on('voice:signal', ({ from, data }) => { if (call && !call.native) onSignal(from, data); });
+  socket.on('voice:audio', ({ from, data }) => { if (call && !call.native) playRelay(from, data); });
   socket.on('voice:kicked', () => { cleanupCall(); toast('Ты отключён от голосового канала'); });
   socket.on('call:ring', ({ channelId, from }) => showRing(channelId, from));
   socket.on('call:declined', ({ channelId, by }) => { if (call?.channelId === channelId) toast(`${dname(by)} отклонил(а) звонок`); });

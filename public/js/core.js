@@ -233,6 +233,7 @@ function upsertDm(d) {
 /* =================== звуки =================== */
 let sfxCtx = null;
 function sfx(kind) {
+  if (typeof call !== 'undefined' && call?.native) return; // в звонке на iPhone звук ведёт приложение — не мешаем ему
   if (!prefs.sounds && kind !== 'ring') return;
   if (kind === 'ring' && !prefs.ringSound) return;
   if (S.me.status === 'dnd' && kind !== 'ring') return;

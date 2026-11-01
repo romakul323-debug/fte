@@ -3,7 +3,7 @@ import UIKit
 import UserNotifications
 
 struct BoostLine: Identifiable {
-    enum State { case ok, warn, work }
+    enum State { case ok, warn, work, info }
     let id = UUID()
     let title: String
     let value: String
@@ -39,20 +39,37 @@ enum HeatReminder {
     }
 }
 
+enum BoostAction: String {
+    case ram, lag, freeze, launch
+
+    var title: String {
+        switch self {
+        case .ram: return "ОЧИСТКА ОЗУ"
+        case .lag: return "УБИРАЮ ЛАГИ"
+        case .freeze: return "АНТИ-ФРИЗ"
+        case .launch: return "ЗАЛЁТ"
+        }
+    }
+}
+
 @MainActor
 final class Booster: ObservableObject {
     enum Phase { case idle, running, done, launching }
 
     @Published var phase: Phase = .idle
+    @Published var action: BoostAction = .launch
     @Published var progress: Double = 0
     @Published var lines: [BoostLine] = []
-    @Published var bestPing: (name: String, ms: Int)? = nil
-    @Published var freedMB: Double? = nil
     @Published var launchNote: String? = nil
 
-    @Published var autoLaunch: Bool { didSet { save(autoLaunch, "autoLaunch") } }
+    // последние результаты — показываются на плитках
+    @Published var bestPing: (name: String, ms: Int)? = nil
+    @Published var freedMB: Double? = nil
+    @Published var freezeHint: String? = nil
+
+    @Published var autoLaunch: Bool { didSet { save(autoLaunch, "autoLaunch2") } }
     @Published var heatReminder: Bool { didSet { save(heatReminder, "heatReminder") } }
-    @Published var editionChoice: String { didSet { UserDefaults.standard.set(editionChoice, forKey: "edition") } }
+    @Published var editionChoice: String { didSet { UserDefaults.standard.set(editionChoice, forKey: "edition2") } }
 
     var active: Bool { phase != .idle }
     var edition: GameEdition { GameLauncher.edition(for: editionChoice) }
@@ -63,24 +80,18 @@ final class Booster: ObservableObject {
 
     init() {
         let d = UserDefaults.standard
-        autoLaunch = d.object(forKey: "autoLaunch") as? Bool ?? true
+        autoLaunch = d.bool(forKey: "autoLaunch2")            // по умолчанию выключен
         heatReminder = d.bool(forKey: "heatReminder")
-        editionChoice = d.string(forKey: "edition") ?? "auto"
+        editionChoice = d.string(forKey: "edition2") ?? "kr"  // по умолчанию Корея
     }
 
     private func save(_ v: Bool, _ key: String) { UserDefaults.standard.set(v, forKey: key) }
 
-    func autoStartIfNeeded(monitor: SystemMonitor) {
+    func onEnter(monitor: SystemMonitor) {
         guard !didAuto else { return }
         didAuto = true
-        Task {
-            await GameLauncher.resolveBundleIDs()
-        }
-        guard autoLaunch else { return }
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 900_000_000)   // сначала показываем главный экран
-            self?.start(monitor: monitor)
-        }
+        Task { await GameLauncher.resolveBundleIDs() }
+        if autoLaunch { run(.launch, monitor: monitor) }
     }
 
     func cancel() {
@@ -88,8 +99,9 @@ final class Booster: ObservableObject {
         phase = .idle
     }
 
-    func start(monitor m: SystemMonitor) {
+    func run(_ a: BoostAction, monitor m: SystemMonitor) {
         task?.cancel()
+        action = a
         lines = []
         progress = 0
         launchNote = nil
@@ -98,80 +110,122 @@ final class Booster: ObservableObject {
         task = Task { [weak self] in
             guard let self else { return }
             m.refresh()
-
-            let hot = m.thermal == .serious || m.thermal == .critical
-            await self.add(0.12, BoostLine(title: "Нагрев", value: m.thermalText, state: hot ? .warn : .ok,
-                                           hint: hot ? "Дай iPhone остыть пару минут, сними чехол" : nil))
-
-            await self.add(0.22, BoostLine(title: "Энергосбережение", value: m.lowPower ? "включено" : "выключено",
-                                           state: m.lowPower ? .warn : .ok,
-                                           hint: m.lowPower ? "Выключи в Пункте управления — режет FPS\(m.hasProMotion ? " и экран до 60 Гц" : "")" : nil))
-
-            if m.lowData {
-                await self.add(0.26, BoostLine(title: "Экономия трафика", value: "включена", state: .warn,
-                                               hint: "Выключи в настройках Wi‑Fi/сотовой — режет сеть игре"))
+            switch a {
+            case .ram: await self.ramSteps(m, from: 0, to: 1)
+            case .lag: await self.lagSteps(m, from: 0, to: 1)
+            case .freeze: await self.freezeSteps(m, from: 0, to: 1)
+            case .launch:
+                await self.quickChecks(m)
+                await self.ramSteps(m, from: 0.3, to: 0.85)
             }
-
-            // очистка ОЗУ
-            let ramIndex = await self.add(0.30, BoostLine(title: "Очистка ОЗУ", value: "освобождаю…", state: .work))
-            let ram = await RAMCleaner.purge()
             if Task.isCancelled { return }
-            let gained = ram.afterMB - ram.beforeMB
-            self.freedMB = max(0, gained)
-            self.replace(ramIndex, BoostLine(
-                title: "Очистка ОЗУ",
-                value: gained > 50 ? "+\(Int(gained)) МБ · \(RAMCleaner.gb(ram.afterMB)) своб." : "\(RAMCleaner.gb(ram.afterMB)) свободно",
-                state: .ok))
-            self.bump(0.52)
-
-            // пинг
-            let pingIndex = await self.add(0.56, BoostLine(title: "Пинг", value: "замер…", state: .work))
-            async let msk = PingTester.measure(host: "ya.ru")
-            async let fra = PingTester.measure(host: "ec2.eu-central-1.amazonaws.com")
-            async let sto = PingTester.measure(host: "ec2.eu-north-1.amazonaws.com")
-            async let seo = PingTester.measure(host: "ec2.ap-northeast-2.amazonaws.com")
-            let all: [(String, PingResult?)] = [("Москва", await msk), ("Европа", await fra), ("Стокгольм", await sto), ("Корея", await seo)]
-            if Task.isCancelled { return }
-            let results = all.compactMap { pair -> (String, PingResult)? in
-                guard let r = pair.1 else { return nil }
-                return (pair.0, r)
-            }
-            if let best = results.min(by: { $0.1.avg < $1.1.avg }) {
-                let ms = Int(best.1.avg)
-                self.bestPing = (best.0, ms)
-                let bad = ms > 120 || best.1.jitter > 25
-                self.replace(pingIndex, BoostLine(title: "Пинг", value: "\(ms) мс · \(best.0)", state: bad ? .warn : .ok,
-                                                  hint: bad ? "Подойди к роутеру, выключи VPN и загрузки" : nil))
-            } else {
-                self.replace(pingIndex, BoostLine(title: "Пинг", value: "нет сети", state: .warn, hint: "Проверь интернет"))
-            }
-            self.bump(0.78)
-
-            // анти-фриз: фризы на iPhone дают перегрев и завышенные настройки — подбираем то, что телефон держит ровно
-            let warm = m.thermal != .nominal
-            let profile: Profile = warm || m.model.tier <= .mid ? .performance : .balanced
-            let s = Recommender.settings(profile, tier: m.model.tier, hz: m.screenHz)
-            let gfx = s.rows.first { $0.name == "Графика" }?.value ?? ""
-            var fps = s.rows.first { $0.name == "Частота кадров" }?.value ?? ""
-            if warm && fps.contains("120") { fps = "90 FPS" }
-            await self.add(0.9, BoostLine(title: "Анти-фриз", value: "\(gfx) · \(fps)", state: .ok,
-                                          hint: "Поставь это в PUBG → Графика. Выше — телефон греется и начинает фризить"))
-
-            let e = self.edition
-            let installed = GameLauncher.isInstalled(e)
-            await self.add(1.0, BoostLine(title: "PUBG \(e.name)", value: installed == false ? "не найдена" : "готова",
-                                          state: installed == false ? .warn : .ok,
-                                          hint: installed == false ? "Проверь версию в настройках" : nil))
-
-            if Task.isCancelled { return }
+            await self.add(1.0, BoostLine(title: "Готово", value: "", state: .info))
             self.phase = .done
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             m.refresh()
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
-            if Task.isCancelled || !self.autoLaunch { return }
-            self.launch()
+            if a == .launch {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                if Task.isCancelled { return }
+                self.launch()
+            }
         }
     }
+
+    // MARK: шаги
+
+    private func quickChecks(_ m: SystemMonitor) async {
+        let hot = m.thermal == .serious || m.thermal == .critical
+        await add(0.1, BoostLine(title: "Нагрев", value: m.thermalText, state: hot ? .warn : .ok,
+                                 hint: hot ? "Дай iPhone остыть пару минут — иначе фризы" : nil))
+        if m.lowPower {
+            await add(0.2, BoostLine(title: "Энергосбережение", value: "включено", state: .warn,
+                                     hint: "Выключи в Пункте управления — режет FPS"))
+        }
+    }
+
+    private func ramSteps(_ m: SystemMonitor, from p0: Double, to p1: Double) async {
+        let before = RAMCleaner.freeMB()
+        await add(p0 + (p1 - p0) * 0.2, BoostLine(title: "Свободно сейчас", value: RAMCleaner.gb(before), state: .info))
+        let i = await add(p0 + (p1 - p0) * 0.35, BoostLine(title: "Выгружаю фоновые", value: "…", state: .work))
+        let r = await RAMCleaner.purge()
+        if Task.isCancelled { return }
+        let gained = max(0, r.afterMB - r.beforeMB)
+        freedMB = gained
+        replace(i, BoostLine(title: "Выгружаю фоновые", value: gained > 30 ? "+\(Int(gained)) МБ" : "уже чисто", state: .ok))
+        bump(p0 + (p1 - p0) * 0.85)
+        await add(p1, BoostLine(title: "Свободно для игры", value: RAMCleaner.gb(r.afterMB), state: .ok))
+    }
+
+    private func lagSteps(_ m: SystemMonitor, from p0: Double, to p1: Double) async {
+        await add(0.08, BoostLine(title: "Сеть", value: m.netType, state: m.online ? .ok : .warn,
+                                  hint: m.online ? (m.netType == "Сотовая" ? "Wi‑Fi обычно стабильнее сотовой" : nil) : "Нет интернета"))
+        if m.lowData {
+            await add(0.14, BoostLine(title: "Экономия трафика", value: "включена", state: .warn,
+                                      hint: "Выключи в настройках Wi‑Fi/сотовой — режет сеть игре"))
+        }
+        let regions: [(String, String)] = [
+            ("Корея", "ec2.ap-northeast-2.amazonaws.com"),
+            ("Япония", "ec2.ap-northeast-1.amazonaws.com"),
+            ("Москва", "ya.ru"),
+            ("Европа", "ec2.eu-central-1.amazonaws.com"),
+            ("Ближ. Восток", "ec2.me-south-1.amazonaws.com"),
+        ]
+        var idx: [Int] = []
+        for (k, r) in regions.enumerated() {
+            idx.append(await add(0.18 + 0.05 * Double(k), BoostLine(title: r.0, value: "…", state: .work)))
+        }
+        var results: [(String, PingResult)] = []
+        await withTaskGroup(of: (Int, PingResult?).self) { g in
+            for (k, r) in regions.enumerated() {
+                g.addTask { (k, await PingTester.measure(host: r.1)) }
+            }
+            for await (k, res) in g {
+                if let res {
+                    results.append((regions[k].0, res))
+                    let ms = Int(res.avg)
+                    self.replace(idx[k], BoostLine(title: regions[k].0, value: "\(ms) мс · ±\(Int(res.jitter))",
+                                                   state: ms > 150 || res.jitter > 25 ? .warn : .ok))
+                } else {
+                    self.replace(idx[k], BoostLine(title: regions[k].0, value: "нет ответа", state: .warn))
+                }
+            }
+        }
+        if Task.isCancelled { return }
+        bump(0.8)
+        if let best = results.min(by: { $0.1.avg < $1.1.avg }) {
+            bestPing = (best.0, Int(best.1.avg))
+            let shaky = best.1.jitter > 20
+            await add(0.9, BoostLine(title: "Лучший сервер", value: best.0, state: .ok,
+                                     hint: shaky ? "Пинг скачет: подойди к роутеру, выключи VPN, загрузки и iCloud-фото"
+                                                 : "Выбери этот регион в лобби PUBG"))
+        }
+    }
+
+    private func freezeSteps(_ m: SystemMonitor, from p0: Double, to p1: Double) async {
+        let hot = m.thermal != .nominal
+        await add(0.15, BoostLine(title: "Нагрев", value: m.thermalText, state: hot ? .warn : .ok,
+                                  hint: hot ? "Сними чехол, не играй на зарядке — горячий iPhone сбрасывает частоту" : nil))
+        await add(0.3, BoostLine(title: "Энергосбережение", value: m.lowPower ? "включено" : "выключено",
+                                 state: m.lowPower ? .warn : .ok,
+                                 hint: m.lowPower ? "Выключи — оно режет FPS\(m.hasProMotion ? " и экран до 60 Гц" : "")" : nil))
+        await add(0.45, BoostLine(title: "Экран", value: "\(m.screenHz) Гц", state: .ok,
+                                  hint: m.hasProMotion ? "Универсальный доступ → Движение → выключи «Ограничение частоты кадров»" : nil))
+        let lowSpace = m.totalGB > 0 && m.freeGB < 4
+        await add(0.6, BoostLine(title: "Память диска", value: String(format: "%.0f ГБ своб.", m.freeGB),
+                                 state: lowSpace ? .warn : .ok,
+                                 hint: lowSpace ? "Меньше 4 ГБ — игра подгружает текстуры рывками" : nil))
+        let profile: Profile = hot || m.model.tier <= .mid ? .performance : .balanced
+        let s = Recommender.settings(profile, tier: m.model.tier, hz: m.screenHz)
+        let gfx = s.rows.first { $0.name == "Графика" }?.value ?? ""
+        var fps = s.rows.first { $0.name == "Частота кадров" }?.value ?? ""
+        if hot && fps.contains("120") { fps = "90 FPS" }
+        freezeHint = "\(gfx) · \(fps)"
+        await add(0.8, BoostLine(title: "Графика в PUBG", value: gfx, state: .ok))
+        await add(0.9, BoostLine(title: "Частота кадров", value: fps, state: .ok,
+                                 hint: "Выше — телефон греется и начинает фризить. Тени и сглаживание — выкл"))
+    }
+
+    // MARK: запуск
 
     func launch() {
         phase = .launching
@@ -182,7 +236,7 @@ final class Booster: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if result == .appStore {
-                    self.launchNote = "iOS не дал открыть игру напрямую — открыл PUBG \(e.name) в App Store, жми «Открыть»."
+                    self.launchNote = "iOS не дал открыть PUBG \(e.name) напрямую — открыл её в App Store, жми «Открыть»."
                 }
                 try? await Task.sleep(nanoseconds: 1_600_000_000)
                 if self.phase == .launching { self.phase = .idle }
@@ -190,14 +244,12 @@ final class Booster: ObservableObject {
         }
     }
 
-    // MARK: шаги
-
     @discardableResult
     private func add(_ p: Double, _ line: BoostLine) async -> Int {
-        try? await Task.sleep(nanoseconds: 380_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         withAnimation(.easeOut(duration: 0.25)) {
             lines.append(line)
-            progress = p
+            progress = max(progress, p)
         }
         haptic.impactOccurred(intensity: line.state == .warn ? 0.9 : 0.4)
         return lines.count - 1
@@ -206,10 +258,9 @@ final class Booster: ObservableObject {
     private func replace(_ i: Int, _ line: BoostLine) {
         guard lines.indices.contains(i) else { return }
         withAnimation(.easeOut(duration: 0.2)) { lines[i] = line }
-        haptic.impactOccurred(intensity: 0.5)
     }
 
     private func bump(_ p: Double) {
-        withAnimation(.easeOut(duration: 0.4)) { progress = p }
+        withAnimation(.easeOut(duration: 0.4)) { progress = max(progress, p) }
     }
 }

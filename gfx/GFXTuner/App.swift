@@ -7,12 +7,11 @@ struct GFXTunerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MainView()
+            RootView()
                 .environmentObject(monitor)
                 .environmentObject(booster)
                 .preferredColorScheme(.dark)
                 .statusBarHidden(true)
-                .onAppear { booster.autoStartIfNeeded(monitor: monitor) }
         }
     }
 }

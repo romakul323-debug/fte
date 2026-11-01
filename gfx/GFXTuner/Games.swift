@@ -9,6 +9,7 @@ struct GameEdition: Identifiable, Equatable {
     let appStoreID: String?
     let store: String          // страна App Store для поиска
     let guesses: [String]      // известные ID приложения в системе
+    var schemes: [String] = ["igame1320://", "fb1036341366506456://"]   // ссылки запуска игры (из Info.plist PUBG)
 
     static let global = GameEdition(id: "global", name: "Global", appStoreID: "1330123889", store: "us",
                                     guesses: ["com.tencent.ig"])
@@ -67,7 +68,14 @@ enum GameLauncher {
     }
 
     /// nil — iOS не даёт проверить; true/false — установлена или нет.
+    /// Работает ли ссылка запуска игры (самый надёжный признак на новых iOS).
+    static var schemeWorks: Bool {
+        guard let url = URL(string: "igame1320://") else { return false }
+        return UIApplication.shared.canOpenURL(url)
+    }
+
     static func isInstalled(_ e: GameEdition) -> Bool? {
+        if e == .global && schemeWorks { return true }
         guard let ws = workspace else { return nil }
         var known = false
         for id in e.bundleIDs {
@@ -88,14 +96,27 @@ enum GameLauncher {
     enum Result { case opened, appStore }
 
     static func launch(_ e: GameEdition, _ done: @escaping (Result) -> Void) {
-        if let ws = workspace {
-            var ids = e.bundleIDs
-            if e == .global { ids += GameEdition.others.bundleIDs }
-            for id in ids where call(ws, "applicationIsInstalled:", id) ?? true {
-                if call(ws, "openApplicationWithBundleID:", id) == true { done(.opened); return }
-            }
+        tryScheme(e, 0, done)
+    }
+
+    /// 1) ссылки игры  2) запуск по ID (на старых iOS)  3) App Store.
+    private static func tryScheme(_ e: GameEdition, _ i: Int, _ done: @escaping (Result) -> Void) {
+        guard i < e.schemes.count, let url = URL(string: e.schemes[i]) else {
+            if openByID(e) { done(.opened); return }
+            if let url = e.appStoreURL { UIApplication.shared.open(url) }
+            done(.appStore)
+            return
         }
-        if let url = e.appStoreURL { UIApplication.shared.open(url) }
-        done(.appStore)
+        UIApplication.shared.open(url, options: [:]) { ok in
+            if ok { done(.opened) } else { tryScheme(e, i + 1, done) }
+        }
+    }
+
+    private static func openByID(_ e: GameEdition) -> Bool {
+        guard let ws = workspace else { return false }
+        var ids = e.bundleIDs
+        if e == .global { ids += GameEdition.others.bundleIDs }
+        for id in ids where call(ws, "openApplicationWithBundleID:", id) == true { return true }
+        return false
     }
 }

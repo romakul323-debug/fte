@@ -17,36 +17,31 @@ struct GFXTunerApp: App {
     }
 }
 
-// MARK: - Цвета и шрифты
+// MARK: - Палитра: чернота, пепел, немного запёкшейся крови
 
 enum Theme {
-    static let bg = Color(red: 0.008, green: 0.0, blue: 0.003)
-    static let blood = Color(red: 0.86, green: 0.05, blue: 0.10)
-    static let darkBlood = Color(red: 0.36, green: 0.01, blue: 0.04)
-    static let clot = Color(red: 0.20, green: 0.0, blue: 0.02)
-    static let ember = Color(red: 1.0, green: 0.30, blue: 0.10)
-    static let bone = Color(red: 0.93, green: 0.88, blue: 0.84)
-    static let steel = Color(red: 0.55, green: 0.52, blue: 0.52)
-    static let dim = Color(red: 0.78, green: 0.62, blue: 0.62).opacity(0.75)
+    static let bg = Color.black
+    static let ink = Color(white: 0.88)
+    static let ash = Color(white: 0.48)
+    static let faint = Color(white: 0.16)
+    static let blood = Color(red: 0.55, green: 0.02, blue: 0.04)
+    static let bloodLight = Color(red: 0.80, green: 0.08, blue: 0.10)
 
-    static let hellGradient = LinearGradient(colors: [Color(red: 1, green: 0.16, blue: 0.14), blood, darkBlood],
-                                             startPoint: .top, endPoint: .bottom)
-
-    static func gothic(_ size: CGFloat) -> Font { .custom("PirataOne-Regular", size: size) }
-    static func heading(_ size: CGFloat) -> Font { .system(size: size, weight: .black, design: .serif) }
+    static func serif(_ size: CGFloat, _ weight: Font.Weight = .light) -> Font {
+        .system(size: size, weight: weight, design: .serif)
+    }
+    static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .monospaced)
+    }
 }
 
-/// Тёмная панель с кровавой кромкой.
-struct HellPanel: View {
-    var radius: CGFloat = 18
+/// Едва заметная рамка.
+struct Frame: View {
+    var radius: CGFloat = 14
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        shape
-            .fill(LinearGradient(colors: [Color(red: 0.09, green: 0.008, blue: 0.018).opacity(0.92),
-                                          Color(red: 0.03, green: 0.0, blue: 0.006).opacity(0.92)],
-                                 startPoint: .topLeading, endPoint: .bottomTrailing))
-            .overlay(shape.strokeBorder(LinearGradient(colors: [Theme.blood.opacity(0.75), Theme.steel.opacity(0.12), Theme.blood.opacity(0.3)],
-                                                       startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
-            .shadow(color: Theme.blood.opacity(0.25), radius: 10)
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(Color(white: 0.04).opacity(0.85))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(Theme.faint, lineWidth: 1))
     }
 }

@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SheetKind: String, Identifiable {
-    case graphics, sens, settings
+    case dns, settings
     var id: String { rawValue }
 }
 
@@ -11,60 +11,53 @@ struct MainView: View {
     @State private var sheet: SheetKind?
     @State private var appeared = false
 
-    private var compact: Bool { UIScreen.main.bounds.height < 740 }
-
     var body: some View {
         ZStack {
-            HellBackground()
+            Darkness()
 
             VStack(spacing: 0) {
-                Spacer(minLength: compact ? 14 : 30)
-                DemonSkull(size: compact ? 140 : 185)
-                    .frame(height: compact ? 150 : 205)
-                    .opacity(appeared ? 1 : 0)
-                    .scaleEffect(appeared ? 1 : 0.9)
+                Spacer(minLength: 40)
 
-                Text("Lensy")
-                    .font(Theme.gothic(56))
-                    .foregroundStyle(Theme.bone)
-                    .shadow(color: Theme.blood, radius: 14)
-                    .padding(.top, -6)
+                GlitchText(text: "LENSY", font: Theme.serif(40, .ultraLight), tracking: 16)
                     .opacity(appeared ? 1 : 0)
-                Text("تحسين الرؤية · \(booster.edition.name)")
-                    .font(.system(size: 14, weight: .heavy, design: .serif))
+                Text("تحسين الرؤية")
+                    .font(Theme.serif(13))
                     .foregroundStyle(Theme.blood)
+                    .padding(.top, 6)
                     .opacity(appeared ? 1 : 0)
 
-                Spacer(minLength: compact ? 8 : 18)
+                Spacer()
 
-                BoostButton { booster.start(monitor: m) }
-                    .frame(width: 210, height: 210)
-                    .scaleEffect(compact ? 0.85 : 1)
+                LaunchButton { booster.start(monitor: m) }
+                    .frame(width: 250, height: 250)
+                    .opacity(appeared ? 1 : 0)
+                    .scaleEffect(appeared ? 1 : 0.94)
 
-                Spacer(minLength: compact ? 8 : 22)
+                Spacer()
 
-                statsRow.padding(.horizontal, 16)
+                status
+                    .padding(.bottom, 22)
 
-                HStack(spacing: 10) {
-                    MenuButton(icon: "slider.horizontal.3", title: "Графика") { sheet = .graphics }
-                    MenuButton(icon: "scope", title: "Сенса") { sheet = .sens }
-                    MenuButton(icon: "gearshape.fill", title: "Настройки") { sheet = .settings }
+                Whisper().padding(.bottom, 22)
+
+                HStack(spacing: 0) {
+                    TextButton(title: "DNS") { sheet = .dns }
+                    Rectangle().fill(Theme.faint).frame(width: 1, height: 16)
+                    TextButton(title: "НАСТРОЙКИ") { sheet = .settings }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 18)
+                .padding(.bottom, 26)
             }
+            .padding(.horizontal, 20)
 
             if booster.active {
-                BoostOverlay().transition(.opacity)
+                LaunchOverlay().transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.35), value: booster.active)
+        .animation(.easeInOut(duration: 0.5), value: booster.active)
         .sheet(item: $sheet) { kind in
             Group {
                 switch kind {
-                case .graphics: GraphicsSheet()
-                case .sens: SensSheet()
+                case .dns: DNSSheet()
                 case .settings: SettingsSheet()
                 }
             }
@@ -73,187 +66,159 @@ struct MainView: View {
         }
         .onAppear {
             m.refresh()
-            withAnimation(.easeOut(duration: 0.9)) { appeared = true }
+            withAnimation(.easeOut(duration: 1.6)) { appeared = true }
         }
     }
 
-    private var pingColor: Color {
-        guard let p = booster.bestPing else { return Theme.steel }
-        if p.ms < 60 { return .green }
-        if p.ms < 120 { return .yellow }
-        return .red
-    }
-
-    private var statsRow: some View {
+    private var status: some View {
         TimelineView(.periodic(from: .now, by: 3)) { _ in
-            HStack(spacing: 10) {
-                Chip(icon: "thermometer.medium", label: "нагрев", value: m.thermalText, color: m.thermalColor)
-                Chip(icon: "memorychip", label: "ОЗУ своб.", value: RAMCleaner.gb(RAMCleaner.freeMB()), color: Theme.bone)
-                Chip(icon: "dot.radiowaves.left.and.right", label: "пинг",
-                     value: booster.bestPing.map { "\($0.ms) мс" } ?? "—", color: pingColor)
-                Chip(icon: "battery.75percent", label: "заряд", value: m.batteryText,
-                     color: (m.battery >= 0 && m.battery < 0.2 && !m.isCharging) ? .red : Theme.bone)
+            HStack(spacing: 14) {
+                stat("НАГРЕВ", m.thermal == .nominal ? "норм" : m.thermalText.lowercased(), hot: m.thermal != .nominal)
+                stat("ОЗУ", RAMCleaner.gb(RAMCleaner.freeMB()), hot: false)
+                stat("ПИНГ", booster.bestPing.map { "\($0.ms) мс" } ?? "—", hot: (booster.bestPing?.ms ?? 0) > 120)
             }
         }
     }
-}
 
-struct Chip: View {
-    let icon: String
-    let label: String
-    let value: String
-    let color: Color
-    var body: some View {
+    private func stat(_ label: String, _ value: String, hot: Bool) -> some View {
         VStack(spacing: 4) {
-            Image(systemName: icon).font(.caption).foregroundStyle(Theme.blood)
-            Text(value).font(.system(size: 13, weight: .heavy, design: .serif))
-                .foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.6)
-            Text(label).font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.steel)
+            Text(label).font(Theme.mono(9, .medium)).tracking(2).foregroundStyle(Theme.ash.opacity(0.7))
+            Text(value).font(Theme.mono(14, .medium)).foregroundStyle(hot ? Theme.bloodLight : Theme.ink)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 9)
-        .background(HellPanel(radius: 14))
     }
 }
 
-struct MenuButton: View {
-    let icon: String
+struct TextButton: View {
     let title: String
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.blood)
-                Text(title).font(.system(size: 13, weight: .heavy, design: .serif)).foregroundStyle(Theme.bone)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 11)
-            .background(HellPanel(radius: 14))
+            Text(title)
+                .font(Theme.mono(12, .medium)).tracking(4)
+                .foregroundStyle(Theme.ash)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
         }
         .buttonStyle(.plain)
     }
 }
 
-/// Огромная кнопка BOOST в рунном круге, бьётся как сердце.
-struct BoostButton: View {
+/// Большая чёрная кнопка LAUNCH: тонкие кольца, медленное дыхание.
+struct LaunchButton: View {
     let action: () -> Void
     @State private var pressed = false
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
-            let beat = heartbeat(tl.date.timeIntervalSinceReferenceDate)
+            let t = tl.date.timeIntervalSinceReferenceDate
+            let b = breath(t, period: 4.5)
             ZStack {
-                RuneRings()
+                Circle()
+                    .stroke(Theme.faint, style: StrokeStyle(lineWidth: 1, dash: [1, 7]))
+                    .rotationEffect(.degrees(t * 4))
+                Circle()
+                    .trim(from: 0, to: 0.18)
+                    .stroke(Theme.blood.opacity(0.35 + 0.4 * b), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                    .rotationEffect(.degrees(-t * 11))
+                    .padding(14)
                 Button(action: action) {
                     ZStack {
-                        Circle()
-                            .fill(RadialGradient(colors: [Color(red: 1, green: 0.2, blue: 0.15), Theme.blood, Theme.clot],
-                                                 center: .center, startRadius: 5, endRadius: 85))
-                        Circle().strokeBorder(Color(red: 1, green: 0.5, blue: 0.45).opacity(0.7), lineWidth: 1.5)
-                        VStack(spacing: -4) {
-                            Text("BOOST")
-                                .font(Theme.gothic(46))
-                                .foregroundStyle(Theme.bone)
-                                .shadow(color: .black.opacity(0.6), radius: 3, y: 2)
-                            Text("ОЗУ · пинг · запуск")
-                                .font(.system(size: 10, weight: .heavy, design: .serif))
-                                .foregroundStyle(Theme.bone.opacity(0.8))
+                        Circle().fill(Color.black)
+                        Circle().strokeBorder(Color(white: 0.22 + 0.18 * b), lineWidth: 1)
+                        VStack(spacing: 8) {
+                            Text("LAUNCH")
+                                .font(Theme.serif(30, .ultraLight))
+                                .tracking(9)
+                                .foregroundStyle(Theme.ink)
+                                .padding(.leading, 9)
+                            Rectangle().fill(Theme.blood.opacity(0.6 + 0.4 * b)).frame(width: 26, height: 1)
+                            Text("озу · сеть · запуск")
+                                .font(Theme.mono(9)).tracking(2)
+                                .foregroundStyle(Theme.ash)
                         }
                     }
-                    .frame(width: 150, height: 150)
-                    .shadow(color: Theme.blood.opacity(0.6 + 0.4 * beat), radius: 18 + 26 * beat)
-                    .scaleEffect((pressed ? 0.93 : 1) * (1 + 0.03 * beat))
+                    .frame(width: 186, height: 186)
+                    .shadow(color: .white.opacity(0.03 + 0.05 * b), radius: 30)
+                    .shadow(color: Theme.blood.opacity(pressed ? 0.8 : 0.12 * b), radius: pressed ? 40 : 24)
+                    .scaleEffect(pressed ? 0.96 : 1)
                 }
                 .buttonStyle(.plain)
                 .simultaneousGesture(DragGesture(minimumDistance: 0)
-                    .onChanged { _ in pressed = true }
+                    .onChanged { _ in if !pressed { pressed = true; UIImpactFeedbackGenerator(style: .soft).impactOccurred() } }
                     .onEnded { _ in pressed = false })
             }
         }
     }
 }
 
-// MARK: - Экран буста
+// MARK: - Экран запуска
 
-struct BoostOverlay: View {
+struct LaunchOverlay: View {
     @EnvironmentObject var booster: Booster
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.94).ignoresSafeArea()
-            HellBackground(intensity: 1.3)
+            Color.black.ignoresSafeArea()
+            Darkness(fog: 0.6)
 
-            VStack(spacing: 12) {
+            VStack(spacing: 18) {
+                Spacer(minLength: 50)
                 ZStack {
-                    Circle().stroke(Theme.clot, lineWidth: 6)
+                    Circle().stroke(Theme.faint, lineWidth: 1)
                     Circle()
                         .trim(from: 0, to: booster.progress)
-                        .stroke(AngularGradient(colors: [Theme.darkBlood, Theme.blood, Theme.ember, Theme.blood], center: .center),
-                                style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                        .stroke(LinearGradient(colors: [Theme.ink, Theme.bloodLight], startPoint: .top, endPoint: .bottom),
+                                style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .shadow(color: Theme.blood, radius: 8)
-                    DemonSkull(size: 118)
-                }
-                .frame(width: 180, height: 180)
-                .padding(.top, 44)
-
-                Text(title)
-                    .font(Theme.gothic(34))
-                    .foregroundStyle(Theme.bone)
-                    .shadow(color: Theme.blood, radius: 10)
-                Text("\(Int(booster.progress * 100))%")
-                    .font(.system(size: 15, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Theme.blood)
-
-                VStack(spacing: 0) {
-                    ForEach(booster.lines) { line in
-                        LineRow(line: line)
-                            .transition(.opacity)
-                        if line.id != booster.lines.last?.id {
-                            Rectangle().fill(Theme.darkBlood.opacity(0.6)).frame(height: 1)
-                        }
+                    VStack(spacing: 6) {
+                        Text("\(Int(booster.progress * 100))")
+                            .font(Theme.serif(44, .ultraLight).monospacedDigit())
+                            .foregroundStyle(Theme.ink)
+                        Text(title).font(Theme.mono(9, .medium)).tracking(3).foregroundStyle(Theme.ash)
                     }
                 }
-                .padding(.horizontal, 14)
-                .background(booster.lines.isEmpty ? nil : HellPanel(radius: 16))
-                .padding(.horizontal, 16)
+                .frame(width: 170, height: 170)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(booster.lines) { line in
+                        LineRow(line: line).transition(.opacity)
+                    }
+                }
+                .padding(.horizontal, 26)
+                .padding(.top, 8)
 
                 if let note = booster.launchNote {
-                    Text(note).font(.footnote).foregroundStyle(Theme.dim)
-                        .multilineTextAlignment(.center).padding(.horizontal, 24)
+                    Text(note).font(Theme.serif(13)).foregroundStyle(Theme.ash)
+                        .multilineTextAlignment(.center).padding(.horizontal, 30)
                 }
 
                 Spacer()
 
-                HStack(spacing: 12) {
-                    Button(booster.phase == .done ? "Закрыть" : "Отмена") { booster.cancel() }
-                        .font(.system(size: 15, weight: .heavy, design: .serif))
-                        .foregroundStyle(Theme.steel)
-                        .frame(maxWidth: .infinity).padding(.vertical, 14)
-                        .background(Capsule().strokeBorder(Theme.steel.opacity(0.4)))
+                HStack(spacing: 0) {
+                    TextButton(title: booster.phase == .done ? "ЗАКРЫТЬ" : "ОТМЕНА") { booster.cancel() }
                     if booster.phase == .done && !booster.autoLaunch {
+                        Rectangle().fill(Theme.faint).frame(width: 1, height: 16)
                         Button { booster.launch() } label: {
-                            Text("ЗАПУСТИТЬ PUBG")
-                                .font(.system(size: 15, weight: .black, design: .serif))
-                                .foregroundStyle(Theme.bone)
-                                .frame(maxWidth: .infinity).padding(.vertical, 14)
-                                .background(Capsule().fill(Theme.hellGradient))
-                                .shadow(color: Theme.blood, radius: 12)
+                            Text("ЗАПУСТИТЬ")
+                                .font(Theme.mono(12, .bold)).tracking(4)
+                                .foregroundStyle(Theme.bloodLight)
+                                .frame(maxWidth: .infinity).padding(.vertical, 10)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
-                .buttonStyle(.plain)
                 .padding(.horizontal, 20)
-                .padding(.bottom, 24)
+                .padding(.bottom, 26)
             }
         }
     }
 
     private var title: String {
         switch booster.phase {
-        case .running: return "Boosting"
-        case .done: return "Ready"
-        case .launching: return "Launching PUBG"
+        case .running: return "ПОДГОТОВКА"
+        case .done: return "ГОТОВО"
+        case .launching: return "ЗАПУСК PUBG"
         case .idle: return ""
         }
     }
@@ -266,23 +231,24 @@ struct LineRow: View {
             HStack(spacing: 10) {
                 Group {
                     switch line.state {
-                    case .work: ProgressView().tint(Theme.blood).scaleEffect(0.7)
-                    case .ok: Image(systemName: "checkmark").foregroundStyle(Theme.blood)
-                    case .warn: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    case .work: Text("…").foregroundStyle(Theme.ash)
+                    case .ok: Text("—").foregroundStyle(Theme.ash)
+                    case .warn: Text("!").foregroundStyle(Theme.bloodLight)
                     }
                 }
-                .font(.system(size: 13, weight: .black))
-                .frame(width: 18)
-                Text(line.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.dim)
+                .font(Theme.mono(13, .bold))
+                .frame(width: 14, alignment: .leading)
+                Text(line.title.uppercased()).font(Theme.mono(11, .medium)).tracking(1.5).foregroundStyle(Theme.ash)
                 Spacer()
-                Text(line.value).font(.system(size: 14, weight: .bold, design: .monospaced)).foregroundStyle(Theme.bone)
+                Text(line.value).font(Theme.mono(13, .medium))
+                    .foregroundStyle(line.state == .warn ? Theme.bloodLight : Theme.ink)
                     .lineLimit(1).minimumScaleFactor(0.6)
             }
             if let h = line.hint {
-                Text(h).font(.caption).foregroundStyle(.orange).padding(.leading, 28)
+                Text(h).font(Theme.serif(12).italic()).foregroundStyle(Theme.ash.opacity(0.8)).padding(.leading, 24)
             }
         }
-        .padding(.vertical, 9)
+        .padding(.vertical, 7)
     }
 }
 
@@ -294,22 +260,21 @@ struct SheetScaffold<Content: View>: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         ZStack {
-            HellBackground(intensity: 0.6)
+            Darkness(fog: 0.5)
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 16) {
                     HStack {
-                        Text(title).font(Theme.heading(28)).foregroundStyle(Theme.bone)
-                            .shadow(color: Theme.blood, radius: 10)
+                        Text(title).font(Theme.serif(30, .ultraLight)).tracking(6).foregroundStyle(Theme.ink)
                         Spacer()
                         Button { dismiss() } label: {
-                            Image(systemName: "xmark").font(.headline).foregroundStyle(Theme.steel)
-                                .padding(10).background(HellPanel(radius: 20))
+                            Image(systemName: "xmark").font(.system(size: 14, weight: .light)).foregroundStyle(Theme.ash)
+                                .padding(10)
                         }
                     }
-                    .padding(.top, 50)
+                    .padding(.top, 40)
                     content
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 20)
                 .padding(.bottom, 30)
             }
         }
@@ -317,145 +282,87 @@ struct SheetScaffold<Content: View>: View {
     }
 }
 
-struct Segmented<T: Hashable>: View {
-    let items: [(T, String, String)]   // значение, иконка, подпись
-    @Binding var selection: T
+struct DNSSheet: View {
+    @State private var shareURL: URL?
+
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(items, id: \.0) { item in
-                Button { selection = item.0 } label: {
-                    VStack(spacing: 5) {
-                        Image(systemName: item.1).font(.title3)
-                        Text(item.2).font(.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .foregroundStyle(selection == item.0 ? Theme.bone : Theme.steel)
-                    .background {
-                        if selection == item.0 {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.hellGradient)
-                                .shadow(color: Theme.blood.opacity(0.8), radius: 10)
-                        } else {
-                            HellPanel(radius: 14)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
+        SheetScaffold(title: "DNS") {
+            Text("Lensy · تحسين الرؤية")
+                .font(Theme.serif(16)).foregroundStyle(Theme.bloodLight)
+            Text("Зашифрованный DNS 1.1.1.1 (Cloudflare). Адреса серверов игры находятся быстрее и стабильнее, провайдер не подменяет ответы и не видит, куда ты заходишь.")
+                .font(Theme.serif(15)).foregroundStyle(Theme.ink.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("На пинг в самом бою DNS не влияет: он работает только в момент поиска сервера. Хедшоты и регистрация попаданий от DNS не зависят.")
+                .font(Theme.serif(13).italic()).foregroundStyle(Theme.ash)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 12) {
+                step(1, "Нажми «Установить» — откроется Safari, разреши загрузку профиля.")
+                step(2, "Настройки → Основные → VPN и управление устройством → Lensy → Установить.")
+                step(3, "Там же: DNS → выбери Lensy.")
+                step(4, "Если стоит другой DNS-профиль (например, sevanDNS) — удали его, два сразу не работают.")
             }
+            .padding(16)
+            .background(Frame())
+
+            Button { ProfileServer.shared.install() } label: {
+                Text("УСТАНОВИТЬ")
+                    .font(Theme.mono(13, .bold)).tracking(5)
+                    .foregroundStyle(Theme.ink)
+                    .frame(maxWidth: .infinity).padding(.vertical, 16)
+                    .background(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.blood, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+
+            Button { shareURL = LensyDNS.fileURL() } label: {
+                Text("сохранить файл профиля")
+                    .font(Theme.mono(11)).tracking(2).foregroundStyle(Theme.ash)
+                    .frame(maxWidth: .infinity).padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+        }
+        .sheet(item: $shareURL) { url in ShareSheet(items: [url]) }
+    }
+
+    private func step(_ n: Int, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(n)").font(Theme.mono(12, .bold)).foregroundStyle(Theme.bloodLight).frame(width: 14)
+            Text(text).font(Theme.serif(14)).foregroundStyle(Theme.ink.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
 
-struct TableCard: View {
-    let title: String?
-    let rows: [SettingRow]
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let title { Text(title).font(Theme.heading(18)).foregroundStyle(Theme.bone).padding(.bottom, 4) }
-            ForEach(rows) { r in
-                HStack {
-                    Text(r.name).foregroundStyle(Theme.dim)
-                    Spacer()
-                    Text(r.value).font(.system(.body, design: .monospaced).weight(.bold)).foregroundStyle(Theme.bone)
-                }
-                .font(.subheadline)
-                .padding(.vertical, 7)
-                if r.id != rows.last?.id { Rectangle().fill(Theme.darkBlood.opacity(0.6)).frame(height: 1) }
-            }
-        }
-        .padding(16)
-        .background(HellPanel(radius: 18))
-    }
-}
+extension URL: Identifiable { public var id: String { absoluteString } }
 
-struct CopyButton: View {
-    let text: () -> String
-    @State private var copied = false
-    var body: some View {
-        Button {
-            UIPasteboard.general.string = text()
-            copied = true
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-        } label: {
-            Label(copied ? "Скопировано" : "Скопировать", systemImage: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 15, weight: .heavy, design: .serif))
-                .foregroundStyle(Theme.bone)
-                .frame(maxWidth: .infinity).padding(.vertical, 14)
-                .background(HellPanel(radius: 14))
-        }
-        .buttonStyle(.plain)
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
-}
-
-struct GraphicsSheet: View {
-    @EnvironmentObject var m: SystemMonitor
-    @State private var selected: Profile = .balanced
-    @State private var didInit = false
-
-    var body: some View {
-        let s = Recommender.settings(selected, tier: m.model.tier, hz: m.screenHz)
-        SheetScaffold(title: "Графика PUBG") {
-            Text("\(m.model.name) · \(m.model.chip) · \(m.screenHz) Гц").font(.subheadline).foregroundStyle(Theme.dim)
-            Segmented(items: Profile.allCases.map { ($0, $0.icon, $0.title) }, selection: $selected)
-            HStack {
-                Text(selected.subtitle).font(.subheadline).foregroundStyle(Theme.dim)
-                if selected == Profile.recommended(for: m.model.tier) {
-                    Text("ДЛЯ ТЕБЯ").font(.caption2.bold()).padding(.horizontal, 8).padding(.vertical, 4)
-                        .foregroundStyle(Theme.bone).background(Theme.blood, in: Capsule())
-                }
-            }
-            TableCard(title: nil, rows: s.rows)
-            if let w = s.warning {
-                Label(w, systemImage: "exclamationmark.triangle.fill").font(.subheadline).foregroundStyle(.orange)
-            }
-            Text("PUBG → Настройки → Графика и звук. Если пункта нет — бери ближайший доступный.")
-                .font(.caption).foregroundStyle(Theme.dim)
-            CopyButton { "PUBG — «\(selected.title)» для \(m.model.name):\n" + s.rows.map { "\($0.name): \($0.value)" }.joined(separator: "\n") }
-        }
-        .onAppear {
-            guard !didInit else { return }
-            didInit = true
-            selected = Profile.recommended(for: m.model.tier)
-        }
-    }
-}
-
-struct SensSheet: View {
-    @State private var style: SensStyle = .thumbs
-    var body: some View {
-        SheetScaffold(title: "Чувствительность") {
-            Text("Стартовые значения под размер твоего экрана. Поиграй пару каток и сдвигай на 5–10%, пока прицел не перестанет «уезжать».")
-                .font(.subheadline).foregroundStyle(Theme.dim)
-            Segmented(items: SensStyle.allCases.map { ($0, $0 == .thumbs ? "hand.tap.fill" : "gyroscope", $0.title) },
-                      selection: $style)
-            ForEach(SensCalc.sections(style)) { sec in
-                TableCard(title: sec.title, rows: sec.rows)
-            }
-            Text("PUBG → Настройки → Чувствительность.").font(.caption).foregroundStyle(Theme.dim)
-            CopyButton { "PUBG — чувствительность (\(style.title)):\n\n" + SensCalc.text(style) }
-        }
-    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
 struct SettingsSheet: View {
     @EnvironmentObject var booster: Booster
 
     var body: some View {
-        SheetScaffold(title: "Настройки") {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Версия PUBG").font(Theme.heading(18)).foregroundStyle(Theme.bone)
-                editionRow(id: "auto", name: "Авто", detail: "Найду установленную сам")
+        SheetScaffold(title: "НАСТРОЙКИ") {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("ВЕРСИЯ PUBG").font(Theme.mono(10, .medium)).tracking(3).foregroundStyle(Theme.ash)
+                    .padding(.bottom, 6)
+                editionRow(id: "auto", name: "Авто", detail: GameLauncher.schemeWorks ? "игра найдена" : "")
                 ForEach(GameEdition.all) { e in
-                    editionRow(id: e.id, name: e.name, detail: installedText(e))
+                    editionRow(id: e.id, name: e.name, detail: "")
                 }
             }
             .padding(16)
-            .background(HellPanel(radius: 18))
+            .background(Frame())
 
             VStack(spacing: 14) {
-                toggle("Автозапуск", "При открытии Lensy сразу делает BOOST и запускает PUBG", $booster.autoLaunch)
-                Rectangle().fill(Theme.darkBlood.opacity(0.6)).frame(height: 1)
-                toggle("Напоминание о перегреве", "Уведомления через 30, 60 и 90 минут игры", Binding(
+                toggle("Автозапуск", "Открыл Lensy — подготовка и сразу PUBG", $booster.autoLaunch)
+                Rectangle().fill(Theme.faint).frame(height: 1)
+                toggle("Напоминание о перегреве", "Через 30, 60 и 90 минут игры", Binding(
                     get: { booster.heatReminder },
                     set: { on in
                         if on {
@@ -467,40 +374,35 @@ struct SettingsSheet: View {
                     }))
             }
             .padding(16)
-            .background(HellPanel(radius: 18))
+            .background(Frame())
 
-            Text("Очистка ОЗУ: Lensy ненадолго занимает память, и iOS сама выгружает свёрнутые приложения. Освободившаяся память достаётся игре. Свёрнутые приложения потом откроются заново.")
-                .font(.caption).foregroundStyle(Theme.dim)
-        }
-    }
-
-    private func installedText(_ e: GameEdition) -> String {
-        switch GameLauncher.isInstalled(e) {
-        case .some(true): return "установлена"
-        case .some(false): return "не найдена"
-        case .none: return ""
+            Text("Очистка ОЗУ: Lensy на пару секунд занимает память, и iOS сама выгружает свёрнутые приложения. Освободившаяся память достаётся игре — меньше подгрузок и фризов в начале катки.")
+                .font(Theme.serif(13).italic()).foregroundStyle(Theme.ash)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func editionRow(id: String, name: String, detail: String) -> some View {
         Button { booster.editionChoice = id } label: {
             HStack {
-                Image(systemName: booster.editionChoice == id ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(booster.editionChoice == id ? Theme.blood : Theme.steel)
-                Text(name).font(.system(size: 16, weight: .bold, design: .serif)).foregroundStyle(Theme.bone)
+                Circle()
+                    .fill(booster.editionChoice == id ? Theme.bloodLight : .clear)
+                    .overlay(Circle().strokeBorder(Theme.ash, lineWidth: 1))
+                    .frame(width: 12, height: 12)
+                Text(name).font(Theme.serif(17)).foregroundStyle(Theme.ink)
                 Spacer()
-                Text(detail).font(.caption).foregroundStyle(detail == "установлена" ? .green : Theme.steel)
+                Text(detail).font(Theme.mono(10)).foregroundStyle(Theme.ash)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
     }
 
     private func toggle(_ title: String, _ sub: String, _ binding: Binding<Bool>) -> some View {
         Toggle(isOn: binding) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 16, weight: .bold, design: .serif)).foregroundStyle(Theme.bone)
-                Text(sub).font(.caption).foregroundStyle(Theme.dim)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(Theme.serif(17)).foregroundStyle(Theme.ink)
+                Text(sub).font(Theme.serif(12).italic()).foregroundStyle(Theme.ash)
             }
         }
         .tint(Theme.blood)

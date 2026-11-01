@@ -21,6 +21,7 @@ targets:
       path: GFXTuner/Info.plist
       properties:
         CFBundleDisplayName: "تحسين الرؤية"
+        NSLocalNetworkUsageDescription: "Lensy отдаёт профиль DNS в Safari прямо с телефона."
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen:
@@ -28,14 +29,13 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIUserInterfaceStyle: Dark
-        UIAppFonts:
-          - PirataOne-Regular.ttf
         UIStatusBarStyle: UIStatusBarStyleLightContent
         UIRequiresFullScreen: true
         ITSAppUsesNonExemptEncryption: false
         LSApplicationQueriesSchemes:
-          - pubgmobile
-          - pubgm
+          - igame1320
+          - fb1036341366506456
+          - tencent1106545419
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ru.gfxtuner.app

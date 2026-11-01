@@ -107,6 +107,11 @@ final class Booster: ObservableObject {
                                            state: m.lowPower ? .warn : .ok,
                                            hint: m.lowPower ? "Выключи в Пункте управления — режет FPS\(m.hasProMotion ? " и экран до 60 Гц" : "")" : nil))
 
+            if m.lowData {
+                await self.add(0.26, BoostLine(title: "Экономия трафика", value: "включена", state: .warn,
+                                               hint: "Выключи в настройках Wi‑Fi/сотовой — режет сеть игре"))
+            }
+
             // очистка ОЗУ
             let ramIndex = await self.add(0.30, BoostLine(title: "Очистка ОЗУ", value: "освобождаю…", state: .work))
             let ram = await RAMCleaner.purge()
@@ -142,17 +147,21 @@ final class Booster: ObservableObject {
             }
             self.bump(0.78)
 
-            let profile = Profile.recommended(for: m.model.tier)
+            // анти-фриз: фризы на iPhone дают перегрев и завышенные настройки — подбираем то, что телефон держит ровно
+            let warm = m.thermal != .nominal
+            let profile: Profile = warm || m.model.tier <= .mid ? .performance : .balanced
             let s = Recommender.settings(profile, tier: m.model.tier, hz: m.screenHz)
             let gfx = s.rows.first { $0.name == "Графика" }?.value ?? ""
-            let fps = s.rows.first { $0.name == "Частота кадров" }?.value ?? ""
-            await self.add(0.9, BoostLine(title: "Графика", value: "\(gfx) · \(fps)", state: .ok))
+            var fps = s.rows.first { $0.name == "Частота кадров" }?.value ?? ""
+            if warm && fps.contains("120") { fps = "90 FPS" }
+            await self.add(0.9, BoostLine(title: "Анти-фриз", value: "\(gfx) · \(fps)", state: .ok,
+                                          hint: "Поставь это в PUBG → Графика. Выше — телефон греется и начинает фризить"))
 
             let e = self.edition
             let installed = GameLauncher.isInstalled(e)
             await self.add(1.0, BoostLine(title: "PUBG \(e.name)", value: installed == false ? "не найдена" : "готова",
                                           state: installed == false ? .warn : .ok,
-                                          hint: installed == false ? "Выбери другую версию в настройках" : nil))
+                                          hint: installed == false ? "Проверь версию в настройках" : nil))
 
             if Task.isCancelled { return }
             self.phase = .done

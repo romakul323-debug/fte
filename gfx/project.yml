@@ -20,7 +20,7 @@ targets:
     info:
       path: GFXTuner/Info.plist
       properties:
-        CFBundleDisplayName: "GFX Тюнер"
+        CFBundleDisplayName: "تحسين الرؤية"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen:

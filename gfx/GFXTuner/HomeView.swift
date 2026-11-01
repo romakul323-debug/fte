@@ -50,7 +50,12 @@ struct HomeView: View {
     }
 
     var body: some View {
-        Screen(title: "GFX Тюнер") {
+        Screen(title: "Lensy") {
+            Text("تحسين الرؤية · Lensy Optimization")
+                .font(.subheadline.bold())
+                .foregroundStyle(Theme.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, -6)
             deviceCard
             readinessCard
             statsGrid

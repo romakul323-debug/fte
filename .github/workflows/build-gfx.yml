@@ -1,4 +1,4 @@
-name: Сборка GFX Тюнер (iOS)
+name: Сборка Lensy Optimization (iOS)
 on:
   push:
     branches: [gfx]
@@ -41,12 +41,12 @@ jobs:
         run: |
           mkdir -p dist/Payload
           cp -R "$RUNNER_TEMP/GFX.xcarchive/Products/Applications/GFXTuner.app" dist/Payload/
-          cd dist && zip -qry GFX-Tuner.ipa Payload && rm -rf Payload
+          cd dist && zip -qry Lensy-Optimization.ipa Payload && rm -rf Payload
       - name: Релиз (не трогает релизы Волны)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete gfx-build --yes --cleanup-tag || true
-          gh release create gfx-build dist/GFX-Tuner.ipa --target "$GITHUB_SHA" --latest=false \
-            --title "GFX Тюнер · сборка ${{ github.run_number }}" \
-            --notes "Ставить через Sideloadly. Скачать: https://github.com/${{ github.repository }}/releases/download/gfx-build/GFX-Tuner.ipa"
+          gh release create gfx-build dist/Lensy-Optimization.ipa --target "$GITHUB_SHA" --latest=false \
+            --title "تحسين الرؤية (Lensy Optimization) · сборка ${{ github.run_number }}" \
+            --notes "Ставить через Sideloadly. Скачать: https://github.com/${{ github.repository }}/releases/download/gfx-build/Lensy-Optimization.ipa"

@@ -76,6 +76,15 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
     fun cancel() { job?.cancel(); phase = Phase.IDLE }
 
     fun run(a: Action) {
+        // один раз просим «Поверх других приложений», иначе «حقن LENSY» не появится над игрой
+        if (a == Action.LAUNCH && inject && !InjectOverlay.canShow(ctx) && !prefs.getBoolean("askedOverlay", false)) {
+            prefs.edit().putBoolean("askedOverlay", true).apply()
+            try {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:${ctx.packageName}")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (_: Exception) {}
+            return
+        }
         job?.cancel()
         action = a
         lines.clear()

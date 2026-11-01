@@ -64,7 +64,7 @@ enum Injector {
         bg = UIApplication.shared.beginBackgroundTask { UIApplication.shared.endBackgroundTask(bg) }
 
         Task {
-            try? await Task.sleep(nanoseconds: 600_000_000)
+            try? await Task.sleep(nanoseconds: 900_000_000)
             var alerted = false
             var cur = 0
             for (p, step) in steps {
@@ -77,7 +77,7 @@ enum Injector {
                                           alertConfiguration: alerted ? nil : AlertConfiguration(
                                             title: "حقن LENSY", body: "جارٍ الحقن في \(game)…", sound: .default))
                     alerted = true
-                    try? await Task.sleep(nanoseconds: 90_000_000)
+                    try? await Task.sleep(nanoseconds: 170_000_000)
                 }
             }
             let done = InjectAttributes.ContentState(progress: 1, step: "جاهز للقتال", done: true)
@@ -284,12 +284,11 @@ final class Booster: ObservableObject {
         haptic.impactOccurred(intensity: 1)
         if heatReminder { HeatReminder.schedule() }
         let e = edition
+        // Live Activity можно запустить только пока Lensy на экране — стартуем до открытия игры
+        if inject { Injector.run(game: "PUBG \(e.id.uppercased())", freedMB: freedMB) }
         GameLauncher.launch(e) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
-                if result == .opened, self.inject {
-                    Injector.run(game: "PUBG \(e.id.uppercased())", freedMB: self.freedMB)
-                }
                 if result == .appStore {
                     self.launchNote = "لم يسمح iOS بفتح PUBG \(e.name) مباشرة — فُتحت في App Store، اضغط «فتح»."
                 }

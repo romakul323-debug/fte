@@ -1,0 +1,52 @@
+name: Сборка GFX Тюнер (iOS)
+on:
+  push:
+    branches: [gfx]
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: gfx-build
+  cancel-in-progress: true
+jobs:
+  ios:
+    name: iOS (IPA без подписи)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Самый новый Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Использую $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+      - name: Проект из project.yml
+        working-directory: gfx
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Сборка
+        working-directory: gfx
+        run: |
+          set -o pipefail
+          xcodebuild -project GFXTuner.xcodeproj -scheme GFXTuner -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/GFX.xcarchive" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            archive 2>&1 | grep -E "error:|warning: .*Swift|BUILD|ARCHIVE|\*\*" | tail -n 80
+          test -d "$RUNNER_TEMP/GFX.xcarchive/Products/Applications/GFXTuner.app"
+      - name: Упаковка IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R "$RUNNER_TEMP/GFX.xcarchive/Products/Applications/GFXTuner.app" dist/Payload/
+          cd dist && zip -qry GFX-Tuner.ipa Payload && rm -rf Payload
+      - name: Релиз (не трогает релизы Волны)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete gfx-build --yes --cleanup-tag || true
+          gh release create gfx-build dist/GFX-Tuner.ipa --target "$GITHUB_SHA" --latest=false \
+            --title "GFX Тюнер · сборка ${{ github.run_number }}" \
+            --notes "Ставить через Sideloadly. Скачать: https://github.com/${{ github.repository }}/releases/download/gfx-build/GFX-Tuner.ipa"

@@ -1,0 +1,46 @@
+name: GFXTuner
+options:
+  bundleIdPrefix: ru.gfxtuner
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+targets:
+  GFXTuner:
+    type: application
+    platform: iOS
+    sources:
+      - GFXTuner
+    info:
+      path: GFXTuner/Info.plist
+      properties:
+        CFBundleDisplayName: "GFX Тюнер"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen:
+          UIColorName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIUserInterfaceStyle: Dark
+        UIRequiresFullScreen: true
+        ITSAppUsesNonExemptEncryption: false
+        LSApplicationQueriesSchemes:
+          - pubgmobile
+          - pubgm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ru.gfxtuner.app
+        PRODUCT_NAME: GFXTuner
+schemes:
+  GFXTuner:
+    build:
+      targets:
+        GFXTuner: all
+    archive:
+      config: Release

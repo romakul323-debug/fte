@@ -1,9 +1,17 @@
 import SwiftUI
 
+enum SheetKind: String, Identifiable {
+    case graphics, sens, settings
+    var id: String { rawValue }
+}
+
 struct MainView: View {
     @EnvironmentObject var m: SystemMonitor
     @EnvironmentObject var booster: Booster
-    @State private var showGraphics = false
+    @State private var sheet: SheetKind?
+    @State private var appeared = false
+
+    private var compact: Bool { UIScreen.main.bounds.height < 740 }
 
     var body: some View {
         ZStack {
@@ -11,63 +19,62 @@ struct MainView: View {
 
             VStack(spacing: 0) {
                 Spacer(minLength: compact ? 14 : 30)
-                DemonSkull(size: compact ? 140 : 190)
-                    .frame(height: compact ? 150 : 210)
+                DemonSkull(size: compact ? 140 : 185)
+                    .frame(height: compact ? 150 : 205)
+                    .opacity(appeared ? 1 : 0)
+                    .scaleEffect(appeared ? 1 : 0.9)
 
                 Text("Lensy")
-                    .font(Theme.gothic(58))
+                    .font(Theme.gothic(56))
                     .foregroundStyle(Theme.bone)
                     .shadow(color: Theme.blood, radius: 14)
                     .padding(.top, -6)
-                Text("تحسين الرؤية")
-                    .font(.system(size: 15, weight: .heavy, design: .serif))
+                    .opacity(appeared ? 1 : 0)
+                Text("تحسين الرؤية · \(booster.edition.name)")
+                    .font(.system(size: 14, weight: .heavy, design: .serif))
                     .foregroundStyle(Theme.blood)
-                    .shadow(color: Theme.blood, radius: 6)
+                    .opacity(appeared ? 1 : 0)
 
-                Spacer(minLength: compact ? 8 : 20)
+                Spacer(minLength: compact ? 8 : 18)
 
                 BoostButton { booster.start(monitor: m) }
                     .frame(width: 210, height: 210)
                     .scaleEffect(compact ? 0.85 : 1)
 
-                Spacer(minLength: compact ? 8 : 24)
+                Spacer(minLength: compact ? 8 : 22)
 
-                statsRow
-                    .padding(.horizontal, 16)
+                statsRow.padding(.horizontal, 16)
 
                 HStack(spacing: 10) {
-                    Button { showGraphics = true } label: {
-                        Label("Графика PUBG", systemImage: "slider.horizontal.3")
-                            .font(.system(size: 14, weight: .heavy, design: .serif))
-                            .foregroundStyle(Theme.bone)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(HellPanel(radius: 14))
-                    }
-                    Button { booster.autoLaunch.toggle() } label: {
-                        Label(booster.autoLaunch ? "Автозапуск" : "Автозапуск выкл",
-                              systemImage: booster.autoLaunch ? "flame.fill" : "flame")
-                            .font(.system(size: 14, weight: .heavy, design: .serif))
-                            .foregroundStyle(booster.autoLaunch ? Theme.blood : Theme.steel)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(HellPanel(radius: 14))
-                    }
+                    MenuButton(icon: "slider.horizontal.3", title: "Графика") { sheet = .graphics }
+                    MenuButton(icon: "scope", title: "Сенса") { sheet = .sens }
+                    MenuButton(icon: "gearshape.fill", title: "Настройки") { sheet = .settings }
                 }
-                .buttonStyle(.plain)
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
                 .padding(.bottom, 18)
             }
 
             if booster.active {
-                BoostOverlay()
-                    .transition(.opacity)
+                BoostOverlay().transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.35), value: booster.active)
-        .sheet(isPresented: $showGraphics) { GraphicsSheet().environmentObject(m) }
-        .onAppear { m.refresh() }
+        .sheet(item: $sheet) { kind in
+            Group {
+                switch kind {
+                case .graphics: GraphicsSheet()
+                case .sens: SensSheet()
+                case .settings: SettingsSheet()
+                }
+            }
+            .environmentObject(m)
+            .environmentObject(booster)
+        }
+        .onAppear {
+            m.refresh()
+            withAnimation(.easeOut(duration: 0.9)) { appeared = true }
+        }
     }
 
     private var pingColor: Color {
@@ -77,34 +84,53 @@ struct MainView: View {
         return .red
     }
 
-    private var compact: Bool { UIScreen.main.bounds.height < 740 }
-
     private var statsRow: some View {
-        HStack(spacing: 10) {
-            Chip(icon: "thermometer.medium", value: m.thermalText, color: m.thermalColor)
-            Chip(icon: "dot.radiowaves.left.and.right",
-                 value: booster.bestPing.map { "\($0.ms) мс" } ?? "— мс",
-                 color: pingColor)
-            Chip(icon: "battery.75percent", value: m.batteryText,
-                 color: (m.battery >= 0 && m.battery < 0.2 && !m.isCharging) ? .red : Theme.bone)
-            Chip(icon: "display", value: "\(m.screenHz) Гц", color: Theme.bone)
+        TimelineView(.periodic(from: .now, by: 3)) { _ in
+            HStack(spacing: 10) {
+                Chip(icon: "thermometer.medium", label: "нагрев", value: m.thermalText, color: m.thermalColor)
+                Chip(icon: "memorychip", label: "ОЗУ своб.", value: RAMCleaner.gb(RAMCleaner.freeMB()), color: Theme.bone)
+                Chip(icon: "dot.radiowaves.left.and.right", label: "пинг",
+                     value: booster.bestPing.map { "\($0.ms) мс" } ?? "—", color: pingColor)
+                Chip(icon: "battery.75percent", label: "заряд", value: m.batteryText,
+                     color: (m.battery >= 0 && m.battery < 0.2 && !m.isCharging) ? .red : Theme.bone)
+            }
         }
     }
 }
 
 struct Chip: View {
     let icon: String
+    let label: String
     let value: String
     let color: Color
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: 4) {
             Image(systemName: icon).font(.caption).foregroundStyle(Theme.blood)
             Text(value).font(.system(size: 13, weight: .heavy, design: .serif))
                 .foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.6)
+            Text(label).font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.steel)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
         .background(HellPanel(radius: 14))
+    }
+}
+
+struct MenuButton: View {
+    let icon: String
+    let title: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.blood)
+                Text(title).font(.system(size: 13, weight: .heavy, design: .serif)).foregroundStyle(Theme.bone)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(HellPanel(radius: 14))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -129,14 +155,14 @@ struct BoostButton: View {
                                 .font(Theme.gothic(46))
                                 .foregroundStyle(Theme.bone)
                                 .shadow(color: .black.opacity(0.6), radius: 3, y: 2)
-                            Text("и запуск PUBG")
-                                .font(.system(size: 11, weight: .heavy, design: .serif))
+                            Text("ОЗУ · пинг · запуск")
+                                .font(.system(size: 10, weight: .heavy, design: .serif))
                                 .foregroundStyle(Theme.bone.opacity(0.8))
                         }
                     }
                     .frame(width: 150, height: 150)
                     .shadow(color: Theme.blood.opacity(0.6 + 0.4 * beat), radius: 18 + 26 * beat)
-                    .scaleEffect((pressed ? 0.93 : 1) * (1 + 0.035 * beat))
+                    .scaleEffect((pressed ? 0.93 : 1) * (1 + 0.03 * beat))
                 }
                 .buttonStyle(.plain)
                 .simultaneousGesture(DragGesture(minimumDistance: 0)
@@ -154,40 +180,42 @@ struct BoostOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.92).ignoresSafeArea()
-            HellBackground(intensity: 1.8)
-            if booster.phase == .running {
-                HeartbeatVignette(intensity: 1.5, period: 0.6).ignoresSafeArea().allowsHitTesting(false)
-            }
+            Color.black.opacity(0.94).ignoresSafeArea()
+            HellBackground(intensity: 1.3)
 
-            VStack(spacing: 14) {
+            VStack(spacing: 12) {
                 ZStack {
-                    Circle().stroke(Theme.clot, lineWidth: 10)
+                    Circle().stroke(Theme.clot, lineWidth: 6)
                     Circle()
                         .trim(from: 0, to: booster.progress)
                         .stroke(AngularGradient(colors: [Theme.darkBlood, Theme.blood, Theme.ember, Theme.blood], center: .center),
-                                style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                                style: StrokeStyle(lineWidth: 6, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .shadow(color: Theme.blood, radius: 10)
-                    DemonSkull(size: 120, shaking: booster.phase == .running)
+                        .shadow(color: Theme.blood, radius: 8)
+                    DemonSkull(size: 118)
                 }
-                .frame(width: 190, height: 190)
-                .padding(.top, 40)
+                .frame(width: 180, height: 180)
+                .padding(.top, 44)
 
                 Text(title)
-                    .font(Theme.heading(24)).tracking(2)
+                    .font(Theme.gothic(34))
                     .foregroundStyle(Theme.bone)
                     .shadow(color: Theme.blood, radius: 10)
                 Text("\(Int(booster.progress * 100))%")
-                    .font(.system(size: 18, weight: .black, design: .serif).monospacedDigit())
+                    .font(.system(size: 15, weight: .bold, design: .monospaced))
                     .foregroundStyle(Theme.blood)
 
-                VStack(spacing: 8) {
+                VStack(spacing: 0) {
                     ForEach(booster.lines) { line in
                         LineRow(line: line)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .transition(.opacity)
+                        if line.id != booster.lines.last?.id {
+                            Rectangle().fill(Theme.darkBlood.opacity(0.6)).frame(height: 1)
+                        }
                     }
                 }
+                .padding(.horizontal, 14)
+                .background(booster.lines.isEmpty ? nil : HellPanel(radius: 16))
                 .padding(.horizontal, 16)
 
                 if let note = booster.launchNote {
@@ -223,9 +251,9 @@ struct BoostOverlay: View {
 
     private var title: String {
         switch booster.phase {
-        case .running: return "ПРОБУЖДЕНИЕ…"
-        case .done: return booster.autoLaunch ? "ГОТОВО. ПРИЗЫВАЮ…" : "ГОТОВО"
-        case .launching: return "ПРИЗЫВ PUBG"
+        case .running: return "Boosting"
+        case .done: return "Ready"
+        case .launching: return "Launching PUBG"
         case .idle: return ""
         }
     }
@@ -234,63 +262,43 @@ struct BoostOverlay: View {
 struct LineRow: View {
     let line: BoostLine
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .font(.subheadline)
-                .foregroundStyle(color)
-                .shadow(color: color, radius: 5)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(line.title).font(.system(size: 14, weight: .bold, design: .serif)).foregroundStyle(Theme.dim)
-                    Spacer()
-                    Text(line.value).font(.system(size: 14, weight: .heavy, design: .serif)).foregroundStyle(Theme.bone)
-                        .lineLimit(1).minimumScaleFactor(0.7)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                Group {
+                    switch line.state {
+                    case .work: ProgressView().tint(Theme.blood).scaleEffect(0.7)
+                    case .ok: Image(systemName: "checkmark").foregroundStyle(Theme.blood)
+                    case .warn: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
                 }
-                if let h = line.hint {
-                    Text(h).font(.caption).foregroundStyle(.orange)
-                }
+                .font(.system(size: 13, weight: .black))
+                .frame(width: 18)
+                Text(line.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.dim)
+                Spacer()
+                Text(line.value).font(.system(size: 14, weight: .bold, design: .monospaced)).foregroundStyle(Theme.bone)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+            }
+            if let h = line.hint {
+                Text(h).font(.caption).foregroundStyle(.orange).padding(.leading, 28)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .background(HellPanel(radius: 12))
-    }
-
-    private var icon: String {
-        switch line.state {
-        case .ok: return "checkmark.seal.fill"
-        case .warn: return "exclamationmark.triangle.fill"
-        case .info: return line.icon
-        }
-    }
-
-    private var color: Color {
-        switch line.state {
-        case .ok: return Theme.blood
-        case .warn: return .orange
-        case .info: return Theme.ember
-        }
+        .padding(.vertical, 9)
     }
 }
 
-// MARK: - Графика (шторка)
+// MARK: - Шторки
 
-struct GraphicsSheet: View {
-    @EnvironmentObject var m: SystemMonitor
+struct SheetScaffold<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
     @Environment(\.dismiss) private var dismiss
-    @State private var selected: Profile?
-    @State private var copied = false
-
-    private var recommended: Profile { Profile.recommended(for: m.model.tier) }
-    private var current: Profile { selected ?? recommended }
-
     var body: some View {
         ZStack {
-            HellBackground(intensity: 0.7)
+            HellBackground(intensity: 0.6)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
-                        Text("Графика PUBG").font(Theme.heading(28)).foregroundStyle(Theme.bone)
+                        Text(title).font(Theme.heading(28)).foregroundStyle(Theme.bone)
                             .shadow(color: Theme.blood, radius: 10)
                         Spacer()
                         Button { dismiss() } label: {
@@ -299,79 +307,202 @@ struct GraphicsSheet: View {
                         }
                     }
                     .padding(.top, 50)
-                    Text("\(m.model.name) · \(m.model.chip) · \(m.screenHz) Гц").font(.subheadline).foregroundStyle(Theme.dim)
-
-                    HStack(spacing: 8) {
-                        ForEach(Profile.allCases) { p in
-                            Button { selected = p; copied = false } label: {
-                                VStack(spacing: 6) {
-                                    Image(systemName: p.icon).font(.title3)
-                                    Text(p.title).font(.caption.bold()).lineLimit(1).minimumScaleFactor(0.8)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .foregroundStyle(current == p ? Theme.bone : Theme.steel)
-                                .background {
-                                    if current == p {
-                                        RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.hellGradient)
-                                            .shadow(color: Theme.blood.opacity(0.8), radius: 12)
-                                    } else {
-                                        HellPanel(radius: 14)
-                                    }
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    let s = Recommender.settings(current, tier: m.model.tier, hz: m.screenHz)
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text(current.title).font(Theme.heading(24)).foregroundStyle(Theme.bone)
-                            if current == recommended {
-                                Text("ДЛЯ ТЕБЯ").font(.caption2.bold())
-                                    .padding(.horizontal, 8).padding(.vertical, 4)
-                                    .foregroundStyle(Theme.bone).background(Theme.blood, in: Capsule())
-                            }
-                        }
-                        Text(current.subtitle).font(.subheadline).foregroundStyle(Theme.dim)
-                        VStack(spacing: 0) {
-                            ForEach(s.rows) { r in
-                                HStack {
-                                    Text(r.name).foregroundStyle(Theme.dim)
-                                    Spacer()
-                                    Text(r.value).font(.system(.body, design: .serif).weight(.heavy)).foregroundStyle(Theme.bone)
-                                }
-                                .padding(.vertical, 10)
-                                if r.id != s.rows.last?.id { Divider().overlay(Theme.darkBlood) }
-                            }
-                        }
-                        if let w = s.warning {
-                            Label(w, systemImage: "exclamationmark.triangle.fill").font(.subheadline).foregroundStyle(.orange)
-                        }
-                        Text("PUBG → Настройки → Графика и звук. Если пункта нет — бери ближайший доступный.")
-                            .font(.caption).foregroundStyle(Theme.dim)
-                    }
-                    .padding(16)
-                    .background(HellPanel(radius: 20))
-
-                    Button {
-                        UIPasteboard.general.string = "PUBG — «\(current.title)» для \(m.model.name):\n" +
-                            s.rows.map { "\($0.name): \($0.value)" }.joined(separator: "\n")
-                        copied = true
-                    } label: {
-                        Label(copied ? "Скопировано" : "Скопировать настройки", systemImage: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 15, weight: .heavy, design: .serif))
-                            .foregroundStyle(Theme.bone)
-                            .frame(maxWidth: .infinity).padding(.vertical, 14)
-                            .background(HellPanel(radius: 14))
-                    }
-                    .buttonStyle(.plain)
+                    content
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 30)
             }
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+struct Segmented<T: Hashable>: View {
+    let items: [(T, String, String)]   // значение, иконка, подпись
+    @Binding var selection: T
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(items, id: \.0) { item in
+                Button { selection = item.0 } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: item.1).font(.title3)
+                        Text(item.2).font(.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(selection == item.0 ? Theme.bone : Theme.steel)
+                    .background {
+                        if selection == item.0 {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.hellGradient)
+                                .shadow(color: Theme.blood.opacity(0.8), radius: 10)
+                        } else {
+                            HellPanel(radius: 14)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+struct TableCard: View {
+    let title: String?
+    let rows: [SettingRow]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let title { Text(title).font(Theme.heading(18)).foregroundStyle(Theme.bone).padding(.bottom, 4) }
+            ForEach(rows) { r in
+                HStack {
+                    Text(r.name).foregroundStyle(Theme.dim)
+                    Spacer()
+                    Text(r.value).font(.system(.body, design: .monospaced).weight(.bold)).foregroundStyle(Theme.bone)
+                }
+                .font(.subheadline)
+                .padding(.vertical, 7)
+                if r.id != rows.last?.id { Rectangle().fill(Theme.darkBlood.opacity(0.6)).frame(height: 1) }
+            }
+        }
+        .padding(16)
+        .background(HellPanel(radius: 18))
+    }
+}
+
+struct CopyButton: View {
+    let text: () -> String
+    @State private var copied = false
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = text()
+            copied = true
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } label: {
+            Label(copied ? "Скопировано" : "Скопировать", systemImage: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 15, weight: .heavy, design: .serif))
+                .foregroundStyle(Theme.bone)
+                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                .background(HellPanel(radius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct GraphicsSheet: View {
+    @EnvironmentObject var m: SystemMonitor
+    @State private var selected: Profile = .balanced
+    @State private var didInit = false
+
+    var body: some View {
+        let s = Recommender.settings(selected, tier: m.model.tier, hz: m.screenHz)
+        SheetScaffold(title: "Графика PUBG") {
+            Text("\(m.model.name) · \(m.model.chip) · \(m.screenHz) Гц").font(.subheadline).foregroundStyle(Theme.dim)
+            Segmented(items: Profile.allCases.map { ($0, $0.icon, $0.title) }, selection: $selected)
+            HStack {
+                Text(selected.subtitle).font(.subheadline).foregroundStyle(Theme.dim)
+                if selected == Profile.recommended(for: m.model.tier) {
+                    Text("ДЛЯ ТЕБЯ").font(.caption2.bold()).padding(.horizontal, 8).padding(.vertical, 4)
+                        .foregroundStyle(Theme.bone).background(Theme.blood, in: Capsule())
+                }
+            }
+            TableCard(title: nil, rows: s.rows)
+            if let w = s.warning {
+                Label(w, systemImage: "exclamationmark.triangle.fill").font(.subheadline).foregroundStyle(.orange)
+            }
+            Text("PUBG → Настройки → Графика и звук. Если пункта нет — бери ближайший доступный.")
+                .font(.caption).foregroundStyle(Theme.dim)
+            CopyButton { "PUBG — «\(selected.title)» для \(m.model.name):\n" + s.rows.map { "\($0.name): \($0.value)" }.joined(separator: "\n") }
+        }
+        .onAppear {
+            guard !didInit else { return }
+            didInit = true
+            selected = Profile.recommended(for: m.model.tier)
+        }
+    }
+}
+
+struct SensSheet: View {
+    @State private var style: SensStyle = .thumbs
+    var body: some View {
+        SheetScaffold(title: "Чувствительность") {
+            Text("Стартовые значения под размер твоего экрана. Поиграй пару каток и сдвигай на 5–10%, пока прицел не перестанет «уезжать».")
+                .font(.subheadline).foregroundStyle(Theme.dim)
+            Segmented(items: SensStyle.allCases.map { ($0, $0 == .thumbs ? "hand.tap.fill" : "gyroscope", $0.title) },
+                      selection: $style)
+            ForEach(SensCalc.sections(style)) { sec in
+                TableCard(title: sec.title, rows: sec.rows)
+            }
+            Text("PUBG → Настройки → Чувствительность.").font(.caption).foregroundStyle(Theme.dim)
+            CopyButton { "PUBG — чувствительность (\(style.title)):\n\n" + SensCalc.text(style) }
+        }
+    }
+}
+
+struct SettingsSheet: View {
+    @EnvironmentObject var booster: Booster
+
+    var body: some View {
+        SheetScaffold(title: "Настройки") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Версия PUBG").font(Theme.heading(18)).foregroundStyle(Theme.bone)
+                editionRow(id: "auto", name: "Авто", detail: "Найду установленную сам")
+                ForEach(GameEdition.all) { e in
+                    editionRow(id: e.id, name: e.name, detail: installedText(e))
+                }
+            }
+            .padding(16)
+            .background(HellPanel(radius: 18))
+
+            VStack(spacing: 14) {
+                toggle("Автозапуск", "При открытии Lensy сразу делает BOOST и запускает PUBG", $booster.autoLaunch)
+                Rectangle().fill(Theme.darkBlood.opacity(0.6)).frame(height: 1)
+                toggle("Напоминание о перегреве", "Уведомления через 30, 60 и 90 минут игры", Binding(
+                    get: { booster.heatReminder },
+                    set: { on in
+                        if on {
+                            HeatReminder.request { ok in booster.heatReminder = ok }
+                        } else {
+                            booster.heatReminder = false
+                            HeatReminder.cancel()
+                        }
+                    }))
+            }
+            .padding(16)
+            .background(HellPanel(radius: 18))
+
+            Text("Очистка ОЗУ: Lensy ненадолго занимает память, и iOS сама выгружает свёрнутые приложения. Освободившаяся память достаётся игре. Свёрнутые приложения потом откроются заново.")
+                .font(.caption).foregroundStyle(Theme.dim)
+        }
+    }
+
+    private func installedText(_ e: GameEdition) -> String {
+        switch GameLauncher.isInstalled(e) {
+        case .some(true): return "установлена"
+        case .some(false): return "не найдена"
+        case .none: return ""
+        }
+    }
+
+    private func editionRow(id: String, name: String, detail: String) -> some View {
+        Button { booster.editionChoice = id } label: {
+            HStack {
+                Image(systemName: booster.editionChoice == id ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(booster.editionChoice == id ? Theme.blood : Theme.steel)
+                Text(name).font(.system(size: 16, weight: .bold, design: .serif)).foregroundStyle(Theme.bone)
+                Spacer()
+                Text(detail).font(.caption).foregroundStyle(detail == "установлена" ? .green : Theme.steel)
+            }
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggle(_ title: String, _ sub: String, _ binding: Binding<Bool>) -> some View {
+        Toggle(isOn: binding) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 16, weight: .bold, design: .serif)).foregroundStyle(Theme.bone)
+                Text(sub).font(.caption).foregroundStyle(Theme.dim)
+            }
+        }
+        .tint(Theme.blood)
     }
 }

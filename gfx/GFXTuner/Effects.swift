@@ -166,7 +166,6 @@ struct DemonSkull: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
             let t = tl.date.timeIntervalSinceReferenceDate
             let beat = heartbeat(t)
-            let flicker = sin(t * 13.1) * sin(t * 7.7) > 0.9 ? 0.55 : 1.0
             let jx = shaking ? Double.random(in: -4...4) : 0
             let jy = shaking ? Double.random(in: -3...3) : 0
             ZStack {
@@ -179,7 +178,6 @@ struct DemonSkull: View {
                     .frame(width: size, height: size)
                     .shadow(color: Theme.blood.opacity(0.5 + 0.5 * beat), radius: 12 + 22 * beat)
                     .scaleEffect(1 + 0.025 * beat)
-                    .opacity(flicker)
                     .offset(x: jx, y: jy)
             }
         }

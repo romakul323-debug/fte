@@ -18,6 +18,8 @@ struct RootView: View {
                 }
             }
         }
+        .environment(\.layoutDirection, .rightToLeft)
+        .environment(\.locale, Locale(identifier: "ar"))
     }
 }
 
@@ -27,6 +29,7 @@ struct KillGate: View {
     @State private var shake: CGFloat = 0
     @State private var flash = 0.0
     @State private var cracks = false
+    @State private var dead = false
 
     var body: some View {
         ZStack {
@@ -34,11 +37,12 @@ struct KillGate: View {
 
             VStack(spacing: 26) {
                 Spacer()
+                DarkEye(period: 6).frame(width: 220, height: 80)
                 GlitchText(text: "LENSY", font: Theme.serif(34, .ultraLight), tracking: 14)
-                Text("предупреждение")
-                    .font(Theme.mono(10, .medium)).tracking(4).foregroundStyle(Theme.bloodLight)
-                Text("эта кнопка уничтожит\nтвой телефон")
-                    .font(Theme.serif(20, .light)).foregroundStyle(Theme.ink.opacity(0.85))
+                Text("تحذير")
+                    .font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.bloodLight)
+                Text("هذا الزر سيدمّر\nهاتفك")
+                    .font(.system(size: 22, weight: .light)).foregroundStyle(Theme.ink.opacity(0.85))
                     .multilineTextAlignment(.center)
 
                 Button(action: kill) {
@@ -46,8 +50,8 @@ struct KillGate: View {
                         Image(systemName: "bolt.trianglebadge.exclamationmark.fill")
                             .font(.system(size: 30, weight: .thin))
                             .foregroundStyle(Theme.bloodLight)
-                        Text("УБИТЬ ТЕЛЕФОН")
-                            .font(Theme.mono(15, .bold)).tracking(5)
+                        Text("اقتل الهاتف")
+                            .font(.system(size: 20, weight: .heavy))
                             .foregroundStyle(Theme.ink)
                     }
                     .frame(width: 250, height: 120)
@@ -62,8 +66,8 @@ struct KillGate: View {
                 .buttonStyle(.plain)
                 .disabled(killing)
 
-                Text("не нажимай")
-                    .font(Theme.serif(12).italic()).foregroundStyle(Theme.ash.opacity(0.6))
+                Text("لا تضغط")
+                    .font(.system(size: 13, weight: .light)).foregroundStyle(Theme.ash.opacity(0.6))
                 Spacer()
                 Spacer()
             }
@@ -71,10 +75,16 @@ struct KillGate: View {
 
             if cracks { Cracks().allowsHitTesting(false) }
             Theme.bloodLight.opacity(flash).ignoresSafeArea().allowsHitTesting(false)
-            if killing {
-                Text("шутка 😈")
-                    .font(Theme.serif(28, .light)).foregroundStyle(Theme.ink)
-                    .transition(.opacity)
+            if dead {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    Scanlines()
+                    VStack(spacing: 18) {
+                        GlitchText(text: "تم تدمير الهاتف", font: .system(size: 26, weight: .heavy), color: Theme.bloodLight)
+                        Text("مزحة 😈").font(.system(size: 18, weight: .light)).foregroundStyle(Theme.ink)
+                    }
+                }
+                .transition(.opacity)
             }
         }
     }
@@ -96,7 +106,11 @@ struct KillGate: View {
             withAnimation(.easeOut(duration: 0.5)) { flash = 0 }
             UINotificationFeedbackGenerator().notificationOccurred(.error)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
+            withAnimation(.easeIn(duration: 0.12)) { dead = true }
+            heavy.impactOccurred(intensity: 1)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
             withAnimation(.easeInOut(duration: 0.35)) { onEnter() }
         }
     }
@@ -146,6 +160,7 @@ struct MainView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 16) {
                     header
+                    DarkEye().frame(width: 200, height: 56).padding(.vertical, -6)
                     gauges
                     tiles
                     launchButton
@@ -179,7 +194,7 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 4) {
                 GlitchText(text: "LENSY", font: Theme.serif(30, .ultraLight), tracking: 11)
                 Text("تحسين الرؤية").font(Theme.serif(12)).foregroundStyle(Theme.bloodLight)
-                Text("\(m.model.name) · \(m.screenHz) Гц")
+                Text("\(m.model.name) · \(m.screenHz) Hz")
                     .font(Theme.mono(10)).foregroundStyle(Theme.ash)
                     .padding(.top, 2)
             }
@@ -203,14 +218,14 @@ struct MainView: View {
         TimelineView(.periodic(from: .now, by: 3)) { _ in
             let free = RAMCleaner.freeMB()
             HStack(spacing: 10) {
-                Gauge(label: "НАГРЕВ", value: m.thermalText.lowercased(),
+                Gauge(label: "الحرارة", value: m.thermalText,
                       level: [0.2, 0.45, 0.75, 1.0][min(m.thermal.rawValue, 3)], hot: m.thermal.rawValue >= 2)
-                Gauge(label: "ОЗУ", value: RAMCleaner.gb(free),
+                Gauge(label: "الذاكرة", value: RAMCleaner.gb(free),
                       level: min(1, free / max(1, RAMCleaner.totalMB)), hot: free < 700)
-                Gauge(label: "ПИНГ", value: booster.bestPing.map { "\($0.ms)" } ?? "—",
+                Gauge(label: "البينغ", value: booster.bestPing.map { "\($0.ms)" } ?? "—",
                       level: booster.bestPing.map { min(1, Double($0.ms) / 200) } ?? 0,
                       hot: (booster.bestPing?.ms ?? 0) > 120)
-                Gauge(label: "ЗАРЯД", value: m.battery >= 0 ? "\(Int(m.battery * 100))%" : "—",
+                Gauge(label: "البطارية", value: m.battery >= 0 ? "\(Int(m.battery * 100))%" : "—",
                       level: Double(max(0, m.battery)), hot: m.battery >= 0 && m.battery < 0.2 && !m.isCharging)
             }
         }
@@ -218,19 +233,19 @@ struct MainView: View {
 
     private var tiles: some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-            Tile(icon: "memorychip", title: "ОЧИСТИТЬ ОЗУ",
-                 result: booster.freedMB.map { $0 > 30 ? "+\(Int($0)) МБ" : "чисто" } ?? "выгрузить фоновые") {
+            Tile(icon: "memorychip", title: "تنظيف الذاكرة",
+                 result: booster.freedMB.map { $0 > 30 ? "+\(Int($0)) MB" : "نظيفة" } ?? "تفريغ الخلفية") {
                 booster.run(.ram, monitor: m)
             }
-            Tile(icon: "waveform.path.ecg", title: "УБРАТЬ ЛАГИ",
-                 result: booster.bestPing.map { "\($0.ms) мс · \($0.name)" } ?? "пинг и сервер") {
+            Tile(icon: "waveform.path.ecg", title: "إزالة اللاغ",
+                 result: booster.bestPing.map { "\($0.ms) ms · \($0.name)" } ?? "البينغ والسيرفر") {
                 booster.run(.lag, monitor: m)
             }
-            Tile(icon: "snowflake", title: "АНТИ-ФРИЗ",
-                 result: booster.freezeHint ?? "нагрев и графика") {
+            Tile(icon: "snowflake", title: "منع التقطيع",
+                 result: booster.freezeHint ?? "الحرارة والرسومات") {
                 booster.run(.freeze, monitor: m)
             }
-            Tile(icon: "shield.lefthalf.filled", title: "LENSY DNS", result: "1.1.1.1 · шифрование") {
+            Tile(icon: "shield.lefthalf.filled", title: "LENSY DNS", result: "1.1.1.1 · مشفّر") {
                 sheet = .dns
             }
         }
@@ -241,15 +256,15 @@ struct MainView: View {
             let b = breath(tl.date.timeIntervalSinceReferenceDate, period: 3.5)
             Button { booster.run(.launch, monitor: m) } label: {
                 HStack(spacing: 14) {
-                    Image(systemName: "airplane").font(.system(size: 22, weight: .light))
+                    Image(systemName: "syringe").font(.system(size: 22, weight: .light))
                         .rotationEffect(.degrees(-30))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("ЗАЛЁТ В PUBG").font(Theme.mono(17, .bold)).tracking(4)
-                        Text("очистка ОЗУ и запуск \(booster.edition.name)")
+                        Text("اقتحام PUBG").font(.system(size: 21, weight: .heavy))
+                        Text("تنظيف · حقن · تشغيل \(booster.edition.name)")
                             .font(Theme.mono(10)).foregroundStyle(Theme.ash)
                     }
                     Spacer()
-                    Image(systemName: "chevron.right").font(.system(size: 16, weight: .light))
+                    Image(systemName: "chevron.left").font(.system(size: 16, weight: .light))
                 }
                 .foregroundStyle(Theme.ink)
                 .padding(.horizontal, 20).padding(.vertical, 20)
@@ -285,7 +300,7 @@ struct Gauge: View {
                     .lineLimit(1).minimumScaleFactor(0.5).padding(.horizontal, 7)
             }
             .frame(width: 64, height: 64)
-            Text(label).font(Theme.mono(8, .medium)).tracking(2).foregroundStyle(Theme.ash)
+            Text(label).font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.ash)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
@@ -309,7 +324,7 @@ struct Tile: View {
                     Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .light)).foregroundStyle(Theme.ash)
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(Theme.mono(13, .bold)).tracking(1.5).foregroundStyle(Theme.ink)
+                    Text(title).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.ink)
                         .lineLimit(1).minimumScaleFactor(0.7)
                     Text(result).font(Theme.mono(10)).foregroundStyle(Theme.ash)
                         .lineLimit(1).minimumScaleFactor(0.7)
@@ -356,13 +371,13 @@ struct ActionOverlay: View {
                         Text("\(Int(booster.progress * 100))")
                             .font(Theme.serif(44, .ultraLight).monospacedDigit())
                             .foregroundStyle(Theme.ink)
-                        Text(subtitle).font(Theme.mono(9, .medium)).tracking(3).foregroundStyle(Theme.ash)
+                        Text(subtitle).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.ash)
                     }
                 }
                 .frame(width: 160, height: 160)
                 .padding(.top, 46)
 
-                Text(booster.action.title).font(Theme.mono(14, .bold)).tracking(5).foregroundStyle(Theme.ink)
+                Text(booster.action.title).font(.system(size: 18, weight: .heavy)).foregroundStyle(Theme.ink)
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -379,12 +394,12 @@ struct ActionOverlay: View {
                 }
 
                 HStack(spacing: 0) {
-                    TextButton(title: booster.phase == .done ? "ГОТОВО" : "ОТМЕНА") { booster.cancel() }
+                    TextButton(title: booster.phase == .done ? "تم" : "إلغاء") { booster.cancel() }
                     if booster.phase == .done && booster.action != .launch {
                         Rectangle().fill(Theme.faint).frame(width: 1, height: 16)
                         Button { booster.run(.launch, monitor: m) } label: {
-                            Text("ЗАЛЁТ")
-                                .font(Theme.mono(12, .bold)).tracking(4)
+                            Text("اقتحام")
+                                .font(.system(size: 15, weight: .heavy))
                                 .foregroundStyle(Theme.bloodLight)
                                 .frame(maxWidth: .infinity).padding(.vertical, 10)
                         }
@@ -399,9 +414,9 @@ struct ActionOverlay: View {
 
     private var subtitle: String {
         switch booster.phase {
-        case .running: return "РАБОТАЮ"
-        case .done: return "ГОТОВО"
-        case .launching: return "ЗАПУСК PUBG"
+        case .running: return "جارٍ العمل"
+        case .done: return "تم"
+        case .launching: return "تشغيل PUBG"
         case .idle: return ""
         }
     }
@@ -422,7 +437,7 @@ struct LineRow: View {
                 }
                 .font(Theme.mono(13, .bold))
                 .frame(width: 14, alignment: .leading)
-                Text(line.title.uppercased()).font(Theme.mono(11, .medium)).tracking(1.5).foregroundStyle(Theme.ash)
+                Text(line.title).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.ash)
                 Spacer()
                 Text(line.value).font(Theme.mono(13, .medium))
                     .foregroundStyle(line.state == .warn ? Theme.bloodLight : Theme.ink)
@@ -444,7 +459,7 @@ struct TextButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(Theme.mono(12, .medium)).tracking(4)
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Theme.ash)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)

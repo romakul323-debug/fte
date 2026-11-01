@@ -527,7 +527,7 @@ fun SettingsScreen(vm: LensyModel, onClose: () -> Unit) {
             Toggle("Автозалёт", "После входа сразу чистит телефон и запускает PUBG", vm.autoLaunch) { vm.setAuto(it) }
             Box(Modifier.fillMaxWidth().height(1.dp).background(C.faint))
             Toggle("Игровой режим", "На время игры: Wi‑Fi без энергосбережения, предупреждение о перегреве", vm.gameMode) {
-                vm.setGameMode(it)
+                vm.changeGameMode(it)
                 if (it && Build.VERSION.SDK_INT >= 33) (ctx as? ComponentActivity)?.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(C.faint))
@@ -535,7 +535,7 @@ fun SettingsScreen(vm: LensyModel, onClose: () -> Unit) {
                 if (it && !Engine.dndAllowed(ctx)) {
                     ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
-                vm.setDnd(it)
+                vm.changeDnd(it)
             }
             if (GameModeService.running) {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(C.faint))

@@ -68,21 +68,21 @@ final class SystemMonitor: ObservableObject {
     private func apply(_ path: NWPath) {
         online = path.status == .satisfied
         lowData = path.isConstrained
-        if !online { netType = "Нет сети" }
-        else if path.usesInterfaceType(.wifi) { netType = "Wi‑Fi" }
-        else if path.usesInterfaceType(.cellular) { netType = "Сотовая" }
-        else if path.usesInterfaceType(.wiredEthernet) { netType = "Кабель" }
-        else { netType = "Другая" }
+        if !online { netType = "لا شبكة" }
+        else if path.usesInterfaceType(.wifi) { netType = "واي فاي" }
+        else if path.usesInterfaceType(.cellular) { netType = "خلوي" }
+        else if path.usesInterfaceType(.wiredEthernet) { netType = "سلكي" }
+        else { netType = "أخرى" }
     }
 
     // MARK: - Подписи для экрана
 
     var thermalText: String {
         switch thermal {
-        case .nominal: return "Холодный"
-        case .fair: return "Тёплый"
-        case .serious: return "Горячий"
-        case .critical: return "Перегрев"
+        case .nominal: return "بارد"
+        case .fair: return "دافئ"
+        case .serious: return "ساخن"
+        case .critical: return "محموم"
         @unknown default: return "—"
         }
     }

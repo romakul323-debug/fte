@@ -11,11 +11,11 @@ struct GameEdition: Identifiable, Equatable {
     let guesses: [String]      // известные ID приложения в системе
     var schemes: [String] = ["igame1320://", "fb1036341366506456://"]   // ссылки запуска игры (из Info.plist PUBG)
 
-    static let global = GameEdition(id: "global", name: "Global", appStoreID: "1330123889", store: "us",
+    static let global = GameEdition(id: "global", name: "العالمية", appStoreID: "1330123889", store: "us",
                                     guesses: ["com.tencent.ig"])
-    static let kr = GameEdition(id: "kr", name: "Корея (KR)", appStoreID: "1366526331", store: "kr",
+    static let kr = GameEdition(id: "kr", name: "الكورية (KR)", appStoreID: "1366526331", store: "kr",
                                 guesses: ["com.pubg.krmobile", "com.pubg.korea", "com.pubg.kr"])
-    static let others = GameEdition(id: "other", name: "Другие регионы", appStoreID: nil, store: "us",
+    static let others = GameEdition(id: "other", name: "مناطق أخرى", appStoreID: nil, store: "us",
                                     guesses: ["com.pubg.imobile", "com.vng.pubgmobile", "com.rekoo.pubgm"])
     static let all: [GameEdition] = [.global, .kr]
 

@@ -47,8 +47,8 @@ class LensyModel(app: Application) : AndroidViewModel(app) {
 
     fun setEdition(id: String) { editionId = id; prefs.edit().putString("edition", id).apply() }
     fun setAuto(v: Boolean) { autoLaunch = v; prefs.edit().putBoolean("auto", v).apply() }
-    fun setGameMode(v: Boolean) { gameMode = v; prefs.edit().putBoolean("gamemode", v).apply() }
-    fun setDnd(v: Boolean) { dnd = v; prefs.edit().putBoolean("dnd", v).apply() }
+    fun changeGameMode(v: Boolean) { gameMode = v; prefs.edit().putBoolean("gamemode", v).apply() }
+    fun changeDnd(v: Boolean) { dnd = v; prefs.edit().putBoolean("dnd", v).apply() }
 
     /** Выбранная версия; если её нет на телефоне — первая установленная. */
     val edition: Edition

@@ -12,7 +12,7 @@ struct SheetScaffold<Content: View>: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack {
-                        Text(title).font(Theme.serif(30, .ultraLight)).tracking(6).foregroundStyle(Theme.ink)
+                        Text(title).font(.system(size: 30, weight: .ultraLight)).foregroundStyle(Theme.ink)
                         Spacer()
                         Button { dismiss() } label: {
                             Image(systemName: "xmark").font(.system(size: 14, weight: .light)).foregroundStyle(Theme.ash)
@@ -37,25 +37,25 @@ struct DNSSheet: View {
         SheetScaffold(title: "DNS") {
             Text("Lensy · تحسين الرؤية")
                 .font(Theme.serif(16)).foregroundStyle(Theme.bloodLight)
-            Text("Зашифрованный DNS 1.1.1.1 (Cloudflare). Адреса серверов игры находятся быстрее и стабильнее, провайдер не подменяет ответы и не видит, куда ты заходишь.")
+            Text("DNS مشفّر 1.1.1.1 من Cloudflare. عناوين سيرفرات اللعبة تُحلّ أسرع وأكثر استقراراً، ومزوّد الإنترنت لا يرى إلى أين تتصل.")
                 .font(Theme.serif(15)).foregroundStyle(Theme.ink.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
-            Text("На пинг в самом бою DNS не влияет: он работает только в момент поиска сервера. Хедшоты и регистрация попаданий от DNS не зависят.")
+            Text("لا يؤثر DNS على البينغ أثناء القتال ولا على الضربات في الرأس — يعمل فقط لحظة البحث عن السيرفر.")
                 .font(Theme.serif(13).italic()).foregroundStyle(Theme.ash)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 12) {
-                step(1, "Нажми «Установить» — откроется Safari, разреши загрузку профиля.")
-                step(2, "Настройки → Основные → VPN и управление устройством → Lensy → Установить.")
-                step(3, "Там же: DNS → выбери Lensy.")
-                step(4, "Если стоит другой DNS-профиль (например, sevanDNS) — удали его, два сразу не работают.")
+                step(1, "اضغط «تثبيت» — سيفتح Safari، اسمح بتنزيل الملف.")
+                step(2, "الإعدادات ← عام ← VPN وإدارة الجهاز ← Lensy ← تثبيت.")
+                step(3, "في نفس المكان: DNS ← اختر Lensy.")
+                step(4, "إذا كان هناك ملف DNS آخر (مثل sevanDNS) احذفه — لا يعمل ملفان معاً.")
             }
             .padding(16)
             .background(Frame())
 
             Button { ProfileServer.shared.install() } label: {
-                Text("УСТАНОВИТЬ")
-                    .font(Theme.mono(13, .bold)).tracking(5)
+                Text("تثبيت")
+                    .font(.system(size: 17, weight: .heavy))
                     .foregroundStyle(Theme.ink)
                     .frame(maxWidth: .infinity).padding(.vertical, 16)
                     .background(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.blood, lineWidth: 1))
@@ -63,8 +63,8 @@ struct DNSSheet: View {
             .buttonStyle(.plain)
 
             Button { shareURL = LensyDNS.fileURL() } label: {
-                Text("сохранить файл профиля")
-                    .font(Theme.mono(11)).tracking(2).foregroundStyle(Theme.ash)
+                Text("حفظ ملف التعريف")
+                    .font(.system(size: 13)).foregroundStyle(Theme.ash)
                     .frame(maxWidth: .infinity).padding(.vertical, 8)
             }
             .buttonStyle(.plain)
@@ -95,11 +95,11 @@ struct SettingsSheet: View {
     @EnvironmentObject var booster: Booster
 
     var body: some View {
-        SheetScaffold(title: "НАСТРОЙКИ") {
+        SheetScaffold(title: "الإعدادات") {
             VStack(alignment: .leading, spacing: 4) {
-                Text("ВЕРСИЯ PUBG").font(Theme.mono(10, .medium)).tracking(3).foregroundStyle(Theme.ash)
+                Text("إصدار PUBG").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.ash)
                     .padding(.bottom, 6)
-                editionRow(id: "auto", name: "Авто", detail: GameLauncher.schemeWorks ? "игра найдена" : "")
+                editionRow(id: "auto", name: "تلقائي", detail: GameLauncher.schemeWorks ? "تم العثور على اللعبة" : "")
                 ForEach(GameEdition.all) { e in
                     editionRow(id: e.id, name: e.name, detail: "")
                 }
@@ -108,9 +108,11 @@ struct SettingsSheet: View {
             .background(Frame())
 
             VStack(spacing: 14) {
-                toggle("Автозалёт", "После входа сразу чистит ОЗУ и запускает PUBG", $booster.autoLaunch)
+                toggle("اقتحام تلقائي", "بعد الدخول ينظّف الذاكرة ويشغّل PUBG فوراً", $booster.autoLaunch)
                 Rectangle().fill(Theme.faint).frame(height: 1)
-                toggle("Напоминание о перегреве", "Через 30, 60 и 90 минут игры", Binding(
+                toggle("الحقن فوق PUBG", "شريط «حقن LENSY» في الجزيرة الديناميكية أثناء فتح اللعبة", $booster.inject)
+                Rectangle().fill(Theme.faint).frame(height: 1)
+                toggle("تذكير بالحرارة", "بعد 30 و60 و90 دقيقة من اللعب", Binding(
                     get: { booster.heatReminder },
                     set: { on in
                         if on {
@@ -124,7 +126,7 @@ struct SettingsSheet: View {
             .padding(16)
             .background(Frame())
 
-            Text("Очистка ОЗУ: Lensy на пару секунд занимает память, и iOS сама выгружает свёрнутые приложения. Освободившаяся память достаётся игре — меньше подгрузок и фризов в начале катки.")
+            Text("تنظيف الذاكرة: يشغل Lensy الذاكرة لثوانٍ فيُغلق iOS التطبيقات المصغّرة بنفسه. الذاكرة المحررة تذهب للعبة — تحميل وتقطيع أقل في بداية الجولة.")
                 .font(Theme.serif(13).italic()).foregroundStyle(Theme.ash)
                 .fixedSize(horizontal: false, vertical: true)
         }

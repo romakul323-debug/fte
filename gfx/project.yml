@@ -2,28 +2,31 @@ name: GFXTuner
 options:
   bundleIdPrefix: ru.gfxtuner
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "16.2"
 settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
     TARGETED_DEVICE_FAMILY: "1"
-    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
 targets:
   GFXTuner:
     type: application
     platform: iOS
     sources:
       - GFXTuner
+      - Shared
+    dependencies:
+      - target: LensyLive
     info:
       path: GFXTuner/Info.plist
       properties:
         CFBundleDisplayName: "تحسين الرؤية"
-        NSLocalNetworkUsageDescription: "Lensy отдаёт профиль DNS в Safari прямо с телефона."
+        CFBundleDevelopmentRegion: ar
+        NSLocalNetworkUsageDescription: "Lensy يرسل ملف DNS إلى Safari من الهاتف نفسه."
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSSupportsLiveActivities: true
         UILaunchScreen:
           UIColorName: LaunchBlack
         UISupportedInterfaceOrientations:
@@ -40,6 +43,27 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ru.gfxtuner.app
         PRODUCT_NAME: GFXTuner
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  LensyLive:
+    type: app-extension
+    platform: iOS
+    sources:
+      - LensyLive
+      - Shared
+    info:
+      path: LensyLive/Info.plist
+      properties:
+        CFBundleDisplayName: Lensy
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ru.gfxtuner.app.live
+        PRODUCT_NAME: LensyLive
+        SKIP_INSTALL: YES
 schemes:
   GFXTuner:
     build:

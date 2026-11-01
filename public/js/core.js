@@ -69,6 +69,8 @@ const ICON = {
   users: I('<circle cx="9" cy="8" r="4"/><path d="M1 21a8 8 0 0 1 16 0M17 4a4 4 0 0 1 0 8M23 21a8 8 0 0 0-5-7.4"/>'),
   dots: I('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'),
   menu: I('<path d="M3 6h18M3 12h18M3 18h18"/>'),
+  back: I('<path d="m15 18-6-6 6-6"/>'),
+  chev: I('<path d="m9 18 6-6-6-6"/>'),
   send: I('<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>'),
   trash: I('<path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/>'),
   logout: I('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>'),
@@ -268,8 +270,21 @@ async function apiAuthPost(path, body, ms = 30000) {
   const r = await fetchT(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + S.token }, body: JSON.stringify(body) }, ms);
   let d = {};
   try { d = await r.json(); } catch {}
+  if (r.status === 404 && !d.error) { showOldServer(); throw new Error('Сервер не обновлён — картинки не загрузить. Перезапусти start.bat на ПК'); }
   if (!r.ok) throw new Error(d.error || 'Не получилось');
   return d;
+}
+
+// сервер на ПК не перезапустили после обновления — подсказываем, что сделать
+const SERVER_NEED = 3;
+function showOldServer() {
+  if ($('#oldsrv') || sessionStorage.getItem('oldsrv-ok')) return;
+  const el = document.createElement('div');
+  el.id = 'oldsrv';
+  el.className = 'oldsrv glass thin';
+  el.innerHTML = `<b>Сервер не обновлён</b><span>Пока его не перезапустить, не работают картинки, личка и звонки с iPhone в фоне. На ПК с сервером: закрой чёрное окно <b>start.bat</b> и запусти его снова.</span><button class="btn sm">Понятно</button>`;
+  el.querySelector('button').onclick = () => { sessionStorage.setItem('oldsrv-ok', '1'); el.remove(); };
+  document.body.appendChild(el);
 }
 
 /* сжать картинку перед отправкой: GIF оставляем как есть (анимация), остальное — в JPEG/WebP */
@@ -436,6 +451,7 @@ function connectSocket() {
 }
 
 function onInit(d) {
+  if ((d.version || 0) < SERVER_NEED) showOldServer(); else $('#oldsrv')?.remove();
   S.user = rememberUser(d.user);
   S.me = d.me || {};
   S.servers = [];

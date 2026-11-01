@@ -409,7 +409,7 @@ function showPopover(html, anchor, kind) {
   $('#layer').appendChild(el);
   popover = { el, kind };
   const small = innerWidth <= 860;
-  if (small && kind === 'card') { el.classList.add('sheet'); return el; }
+  if (small && (kind === 'card' || kind === 'picker')) { el.classList.add('sheet'); return el; }
   const r = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2, right: innerWidth / 2, top: innerHeight / 2, bottom: innerHeight / 2 };
   const w = el.offsetWidth, h = el.offsetHeight;
   let x = r.right + 10, y = r.top;
@@ -479,7 +479,7 @@ function addServerModal() {
         upsertServer(res.server);
         closeModal();
         selectServer(res.server.id);
-        closeDrawer();
+        if (innerWidth > 860) closeDrawer(); // на телефоне остаёмся в списке — видно каналы нового сервера
         setTimeout(inviteModal, 200);
       });
     };
@@ -492,7 +492,7 @@ function addServerModal() {
         Object.assign(S.voice, res.voice || {});
         closeModal();
         selectServer(res.server.id);
-        closeDrawer();
+        if (innerWidth > 860) closeDrawer(); // на телефоне остаёмся в списке — видно каналы нового сервера
       });
     };
   });
@@ -580,6 +580,8 @@ let settingsTab = 'profile';
 let draft = null;
 const TABS = [['profile', ICON.user, 'Профиль'], ['account', ICON.shield, 'Аккаунт'], ['voice', ICON.mic, 'Голос и звук'], ['notify', ICON.bell, 'Уведомления'], ['look', ICON.palette, 'Внешний вид']];
 function openSettings(tab) {
+  // на телефоне без явного раздела сначала показываем список разделов (как в настройках iPhone)
+  const direct = !!tab || innerWidth > 860;
   settingsTab = tab || settingsTab;
   closePopover();
   const u = S.user;
@@ -598,20 +600,25 @@ function openSettings(tab) {
     el.className = 'settings';
     document.body.appendChild(el);
   }
-  el.innerHTML = `<div class="settings-card glass"><nav class="st-nav"><h3>Настройки</h3>${TABS.map(([k, ic, t]) => `<button data-stab="${k}">${ic}${t}</button>`).join('')}<div class="sp"></div><button data-act="logout" style="color:var(--red)">${ICON.logout}Выйти</button></nav>
-    <div class="st-body"><div class="st-head"><h2 id="stTitle"></h2><button class="icon-btn" data-act="close-settings" title="Закрыть">${ICON.x}</button></div><div class="st-scroll" id="stBody"></div></div></div>`;
+  el.innerHTML = `<div class="settings-card glass"><nav class="st-nav"><div class="st-nav-head"><h3>Настройки</h3><button class="icon-btn st-x" data-act="close-settings" title="Закрыть">${ICON.x}</button></div>
+    <button class="st-me" data-stab="profile">${avatar(u, 'lg', { ring: false })}<div><b>${esc(dname(u))}</b><small>Аватар, баннер, имя, статус</small></div>${ICON.chev}</button>
+    ${TABS.map(([k, ic, t]) => `<button data-stab="${k}">${ic}<span>${t}</span><i class="chev">${ICON.chev}</i></button>`).join('')}<div class="sp"></div><button data-act="logout" class="st-logout">${ICON.logout}<span>Выйти</span></button></nav>
+    <div class="st-body"><div class="st-head"><button class="icon-btn st-back" data-stback title="Назад">${ICON.back}</button><h2 id="stTitle"></h2><button class="icon-btn" data-act="close-settings" title="Закрыть">${ICON.x}</button></div><div class="st-scroll" id="stBody"></div></div></div>`;
   el.onclick = (e) => {
     if (e.target === el) closeSettings();
+    if (e.target.closest('[data-stback]')) { stopMicTest(); el.querySelector('.settings-card').classList.remove('st-open'); return; }
     const t = e.target.closest('[data-stab]');
     if (t) showTab(t.dataset.stab);
   };
-  showTab(settingsTab);
+  showTab(settingsTab, direct);
 }
 function closeSettings() { stopMicTest(); $('#settings')?.remove(); draft = null; }
-function showTab(tab) {
+function showTab(tab, open = true) {
   settingsTab = tab;
   stopMicTest();
-  $$('.st-nav [data-stab]').forEach((b) => b.classList.toggle('on', b.dataset.stab === tab));
+  $$('.st-nav [data-stab]').forEach((b) => b.classList.toggle('on', b.dataset.stab === tab && !b.classList.contains('st-me')));
+  if (!open) return;
+  $('#settings .settings-card')?.classList.add('st-open');
   $('#stTitle').textContent = TABS.find((t) => t[0] === tab)[2];
   const body = $('#stBody');
   body.onclick = body.oninput = body.onchange = null;

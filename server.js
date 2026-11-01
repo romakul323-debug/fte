@@ -438,6 +438,7 @@ const online = new Map(); // userId -> кол-во подключений
 const voice = new Map(); // channelId -> Map(socketId -> состояние)
 const voiceOf = new Map(); // socketId -> channelId
 
+const SERVER_VERSION = 3;
 const voiceList = (channelId) => [...(voice.get(channelId)?.values() || [])];
 
 // «Нативный звук» (приложение на iPhone): звук звонка идёт не через WebView, а через отдельное
@@ -634,7 +635,7 @@ io.on('connection', (socket) => {
     const presence = {};
     for (const id of ids) presence[id] = presenceOf(userById(id));
     const voiceIds = servers.flatMap((s) => s.channels.filter((c) => c.type === 'voice').map((c) => c.id)).concat(dms.map((d) => d.id));
-    reply(cb, { user: pubUser(me), me: meInfo(), servers, dms, presence, voice: voiceSnapshot(voiceIds) });
+    reply(cb, { version: SERVER_VERSION, user: pubUser(me), me: meInfo(), servers, dms, presence, voice: voiceSnapshot(voiceIds) });
   });
 
   // ----- профиль -----
@@ -1015,8 +1016,14 @@ db.init()
     indexMessages();
     // старые аккаунты: статус по умолчанию
     for (const u of db.data.users) if (!u.status) u.status = 'online';
+    server.once('error', (e) => {
+      if (e.code === 'EADDRINUSE') console.log(`\n  ⚠ Порт ${PORT} занят — сервер уже запущен в другом окне. Закрой лишнее окно start.bat.`);
+      else console.log('\n  Ошибка запуска:', e.message);
+      process.exit(1);
+    });
     server.listen(PORT, () => {
       console.log(`\n  Волна запущена: http://localhost:${PORT}`);
+      watchSelf();
       if (HOSTED_URL) return startHosted();
       for (const list of Object.values(os.networkInterfaces()))
         for (const a of list || [])
@@ -1196,6 +1203,32 @@ async function startTunnel() {
   };
   run();
   setInterval(() => { if (publicUrl) announce(publicUrl); }, 20 * 60 * 1000);
+}
+
+// ---------- самообновление на ПК: новые файлы сервера → тихий перезапуск (start.bat запускает заново) ----------
+function watchSelf() {
+  if (process.env.VOLNA_LOOP !== '1') return;
+  const files = ['server.js', 'db.js'].map((f) => path.join(__dirname, f));
+  const stamp = () => files.map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }).join('|');
+  let last = stamp();
+  let pending = null;
+  setInterval(() => {
+    const now = stamp();
+    if (now === last) return;
+    last = now;
+    clearTimeout(pending);
+    pending = setTimeout(restartSelf, 3000); // ждём, пока докопируются все файлы
+  }, 2000).unref();
+}
+async function restartSelf() {
+  const ok = spawnSync(process.execPath, ['--check', path.join(__dirname, 'server.js')]).status === 0;
+  if (!ok) return console.log('  ⚠ Новая версия сервера с ошибкой — продолжаю работать на старой');
+  console.log('\n  🔄 Пришло обновление — перезапускаю сервер…');
+  const p = tunnelProc;
+  tunnelProc = null;
+  p?.kill();
+  try { await Promise.race([db.flush(), new Promise((r) => setTimeout(r, 5000))]); } catch {}
+  process.exit(75);
 }
 
 for (const sig of ['SIGINT', 'SIGTERM'])

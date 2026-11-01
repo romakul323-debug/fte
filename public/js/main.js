@@ -226,25 +226,93 @@ $('#messages').addEventListener('click', (e) => {
   const m = msgById(row.dataset.mid);
   const act = e.target.closest('[data-mact]')?.dataset.mact;
   const react = e.target.closest('[data-react]')?.dataset.react;
-  if (react && m) { socket.emit('message:react', { id: m.id, emoji: react }, (r) => r?.error && toast(r.error)); return; }
+  if (react && m) { reactTo(m, react); return; }
   if (act && m) {
-    if (act === 'reply') startReply(m);
-    else if (act === 'edit') startEdit(m);
-    else if (act === 'copy') navigator.clipboard?.writeText(m.text).then(() => toast('Скопировано'), () => {});
-    else if (act === 'react') showPicker(e.target.closest('[data-mact]'), (emo) => socket.emit('message:react', { id: m.id, emoji: emo }, (r) => r?.error && toast(r.error)));
-    else if (act === 'del' && confirm('Удалить сообщение?')) socket.emit('message:delete', { id: m.id }, (r) => r?.error && toast(r.error));
+    msgAction(act, m, e.target.closest('[data-mact]'));
     row.classList.remove('sel');
     return;
   }
   if (e.target.closest('a,button,[data-user]')) return;
+  if (isTouch && m) {
+    // телефон: один тап — меню снизу, два быстрых тапа — ❤️
+    if (tapT && tapRow === row) { clearTimeout(tapT); tapT = null; reactTo(m, '❤️'); return; }
+    clearTimeout(tapT);
+    tapRow = row;
+    tapT = setTimeout(() => { tapT = null; if (!swiped) openMsgSheet(row, m); }, 260);
+    return;
+  }
   $$('.msg.sel').forEach((x) => x !== row && x.classList.remove('sel'));
   row.classList.toggle('sel');
 });
-// двойной тап по сообщению — ❤️ (как в мессенджерах)
+let tapT = null, tapRow = null;
+const reactTo = (m, emo) => socket.emit('message:react', { id: m.id, emoji: emo }, (r) => r?.error && toast(r.error));
+function msgAction(act, m, anchor) {
+  if (act === 'reply') startReply(m);
+  else if (act === 'edit') startEdit(m);
+  else if (act === 'copy') navigator.clipboard?.writeText(m.text).then(() => toast('Скопировано'), () => toast('Не получилось скопировать'));
+  else if (act === 'react') showPicker(anchor, (emo) => reactTo(m, emo));
+  else if (act === 'del' && confirm('Удалить сообщение?')) socket.emit('message:delete', { id: m.id }, (r) => r?.error && toast(r.error));
+}
+// двойной клик по сообщению на ПК — ❤️
 $('#messages').addEventListener('dblclick', (e) => {
   const row = e.target.closest('.msg');
-  if (!row || e.target.closest('a,button,[data-img]')) return;
+  if (isTouch || !row || e.target.closest('a,button,[data-img]')) return;
   socket.emit('message:react', { id: row.dataset.mid, emoji: '❤️' });
+});
+
+/* меню сообщения снизу экрана (телефон) */
+const SHEET_ACTS = { reply: [ICON.reply, 'Ответить'], copy: [ICON.copy, 'Скопировать текст'], edit: [ICON.edit, 'Изменить'], del: [ICON.trash, 'Удалить'] };
+function openMsgSheet(row, m) {
+  closeSheet();
+  const acts = [...row.querySelectorAll('.msg-tools [data-mact]')].map((b) => b.dataset.mact).filter((a) => SHEET_ACTS[a]);
+  const prev = (m.text || (m.attachments?.length ? '🖼 Картинка' : '')).slice(0, 140);
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  bg.innerHTML = `<div class="sheet glass"><i class="grab"></i>
+    <div class="sheet-react">${QUICK.slice(0, 6).map((e) => `<button data-sr="${e}">${e}</button>`).join('')}<button data-sa="react" class="more">${ICON.smile}</button></div>
+    <div class="sheet-prev"><b>${esc(dname(userOf(m.author)))}</b> ${esc(prev)}</div>
+    ${acts.map((a) => `<button class="sheet-row ${a === 'del' ? 'danger' : ''}" data-sa="${a}">${SHEET_ACTS[a][0]}<span>${SHEET_ACTS[a][1]}</span></button>`).join('')}</div>`;
+  document.body.appendChild(bg);
+  requestAnimationFrame(() => bg.classList.add('on'));
+  bg.onclick = (e) => {
+    const r = e.target.closest('[data-sr]');
+    const a = e.target.closest('[data-sa]');
+    if (r) { reactTo(m, r.dataset.sr); closeSheet(); return; }
+    if (a) { closeSheet(); setTimeout(() => msgAction(a.dataset.sa, m, a.dataset.sa === 'react' ? $('#composer') : null), 10); return; }
+    if (!e.target.closest('.sheet')) closeSheet();
+  };
+}
+function closeSheet() { $$('.sheet-bg').forEach((x) => x.remove()); }
+
+/* свайп сообщения вправо — ответить (как в Telegram) */
+let sw0 = null, swiped = false;
+$('#messages').addEventListener('touchstart', (e) => {
+  const t = e.touches[0];
+  const row = e.target.closest('.msg');
+  swiped = false;
+  sw0 = row && t.clientX > 30 ? { x: t.clientX, y: t.clientY, row, dx: 0, lock: null } : null;
+}, { passive: true });
+$('#messages').addEventListener('touchmove', (e) => {
+  if (!sw0) return;
+  const t = e.touches[0];
+  const dx = t.clientX - sw0.x, dy = t.clientY - sw0.y;
+  if (sw0.lock === null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) sw0.lock = Math.abs(dx) > Math.abs(dy) * 1.4 && dx > 0;
+  if (!sw0.lock) return;
+  sw0.dx = Math.max(0, Math.min(90, dx));
+  sw0.row.style.transform = `translateX(${sw0.dx}px)`;
+  sw0.row.classList.toggle('swipe-go', sw0.dx > 60);
+}, { passive: true });
+$('#messages').addEventListener('touchend', () => {
+  if (!sw0) return;
+  const { row, dx, lock } = sw0;
+  sw0 = null;
+  if (!lock) return;
+  swiped = true;
+  row.style.transition = 'transform .18s';
+  row.style.transform = '';
+  setTimeout(() => { row.style.transition = ''; row.classList.remove('swipe-go'); }, 200);
+  const m = msgById(row.dataset.mid);
+  if (dx > 60 && m) { navigator.vibrate?.(8); startReply(m); }
 });
 
 /* =================== клики =================== */
@@ -332,10 +400,11 @@ document.addEventListener('input', (e) => {
 });
 
 /* =================== телефон и прочее =================== */
-$('#menuBtn').innerHTML = ICON.menu;
+// телефон: главный экран — список чатов и каналов, чат открывается поверх, «‹» возвращает к списку
+$('#menuBtn').innerHTML = ICON.back;
 $('#membersBtn').innerHTML = ICON.users;
 function closeDrawer() { document.body.classList.remove('drawer'); }
-$('#menuBtn').onclick = () => document.body.classList.toggle('drawer');
+$('#menuBtn').onclick = () => { closeSheet(); document.body.classList.add('drawer'); };
 $('#membersBtn').onclick = () => document.body.classList.toggle('show-members');
 $('#netChange').onclick = () => { store.set('token', null); store.set('serverManual', '1'); location.reload(); };
 $('#netChange').hidden = !isShell || !!FIXED;
@@ -343,14 +412,15 @@ $('#scrim').onclick = () => document.body.classList.remove('drawer', 'show-membe
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if ($('.viewer')) return $('.viewer').remove();
+  if ($('.sheet-bg')) return closeSheet();
   if (popover) return closePopover();
   if ($('#settings')) return closeSettings();
   closeModal();
   document.body.classList.remove('drawer');
 });
-// свайп вправо от края — открыть меню (телефон)
+// свайп вправо от края — назад к списку (телефон)
 let touchX = null;
-document.addEventListener('touchstart', (e) => { const t = e.touches[0]; touchX = t.clientX < 24 ? t.clientX : null; }, { passive: true });
+document.addEventListener('touchstart', (e) => { const t = e.touches[0]; touchX = t.clientX < 30 && !$('#settings') && !$('.sheet-bg') ? t.clientX : null; }, { passive: true });
 document.addEventListener('touchend', (e) => { if (touchX != null && e.changedTouches[0].clientX - touchX > 60) document.body.classList.add('drawer'); touchX = null; }, { passive: true });
 if (window.visualViewport) {
   const fit = () => { document.documentElement.style.setProperty('--app-h', visualViewport.height + 'px'); window.scrollTo(0, 0); };
@@ -371,6 +441,7 @@ if (isNative) document.body.classList.add('native');
 
 /* =================== старт =================== */
 if (innerWidth > 1180) document.body.classList.add('show-members');
+if (innerWidth <= 860) document.body.classList.add('drawer');
 (async () => {
   const hashLogin = /^#login=([a-f0-9]+)$/.exec(location.hash);
   if (hashLogin) { history.replaceState(null, '', location.pathname); return finishOAuth(hashLogin[1]); }

@@ -14,7 +14,10 @@ echo Installing dependencies - one time only...
 call npm install --no-audit --no-fund --omit=dev
 :run
 start "" http://localhost:3000
+set VOLNA_LOOP=1
+:loop
 node server.js --tunnel
+if "%errorlevel%"=="75" goto loop
 pause
 exit /b
 :nonode

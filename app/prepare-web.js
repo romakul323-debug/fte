@@ -27,4 +27,10 @@ cap.overrideUserAgent = 'VolnaApp/1.0';
 fs.writeFileSync(capPath, JSON.stringify(cap, null, 2) + '\n');
 fs.copyFileSync(path.join(__dirname, 'offline.html'), path.join(dst, 'offline.html'));
 fs.writeFileSync(path.join(dst, 'offline-config.js'), `window.VOLNA_SERVER = ${JSON.stringify(server)};\n`);
+// адрес сервера для расширения показа экрана iPhone
+const extPlist = path.join(__dirname, 'ios', 'App', 'VolnaScreen', 'Info.plist');
+if (fs.existsSync(extPlist)) {
+  const pl = fs.readFileSync(extPlist, 'utf8').replace(/(<key>VolnaServer<\/key>\s*<string>)[^<]*(<\/string>)/, `$1${server.replace(/[<&]/g, '')}$2`);
+  fs.writeFileSync(extPlist, pl);
+}
 console.log('www готов' + (server ? `, сервер по умолчанию: ${server}` : ''));

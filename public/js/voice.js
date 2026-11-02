@@ -131,6 +131,7 @@ function joinNativeVoice(chId, opts) {
     if (res?.error || !res?.leg) { toast(res?.error || 'Не получилось подключиться'); cleanupCall(); return; }
     me.selfId = res.selfId;
     me.leg = res.leg;
+    for (const x of res.peers) ensurePeer(x.socketId, true);
     renderSidebar();
     renderMain();
     let r;
@@ -166,6 +167,13 @@ function reattachNative(me) {
     }
     me.detached = false;
     me.selfId = res.selfId;
+    // видео-соединения после сна WebView мертвы — пересоздаём
+    for (const id of [...peers.keys()]) closePeer(id);
+    for (const st of S.voice[me.channelId] || []) {
+      if (st.socketId === me.selfId) continue;
+      signal(st.socketId, { reset: true });
+      ensurePeer(st.socketId, true);
+    }
     renderSidebar();
     renderMain();
   });
@@ -260,15 +268,15 @@ function signal(to, data) { socket.emit('voice:signal', { to, data }); }
 
 function ensurePeer(id, initiator, native) {
   if (peers.has(id)) return peers.get(id);
-  if (native) {
-    // участник из приложения на iPhone: звук только через сервер, без прямого соединения
-    const p = { id, native: true, pc: null, created: Date.now(), relay: true, badSince: 0, chain: Promise.resolve(), audioEl: document.createElement('audio'), videoEl: document.createElement('video') };
-    peers.set(id, p);
-    applyPeerVolume(p);
-    return p;
-  }
+  // участник из приложения на iPhone (id «n:…»): голос идёт через сервер, а прямое соединение — только для видео и экрана.
+  // Если мы сами в приложении на iPhone — тоже только видео.
+  native = native || String(id).startsWith('n:');
+  const videoOnly = native || !!call?.native;
   const pc = new RTCPeerConnection({ iceServers: S.ice });
-  const p = { id, pc, created: Date.now(), relay: false, polite: !initiator, waitOffer: !initiator, chain: Promise.resolve(), makingOffer: false, ignoreOffer: false, badSince: 0, lastRestart: 0, videoSender: null, audioEl: document.createElement('audio'), videoEl: document.createElement('video') };
+  const p = { id, pc, native, videoOnly, created: Date.now(), relay: native, polite: !initiator, waitOffer: !initiator, chain: Promise.resolve(), makingOffer: false, ignoreOffer: false, badSince: 0, lastRestart: 0, videoSender: null, audioEl: document.createElement('audio'), videoEl: document.createElement('video'), shareEl: document.createElement('audio') };
+  p.shareEl.autoplay = true;
+  p.shareEl.setAttribute('playsinline', '');
+  $('#audios').appendChild(p.shareEl);
   p.audioEl.autoplay = true;
   p.audioEl.setAttribute('playsinline', '');
   p.audioEl.muted = !!call?.deafened;
@@ -280,9 +288,14 @@ function ensurePeer(id, initiator, native) {
   peers.set(id, p);
   applyPeerVolume(p);
 
-  if (call?.sendTrack) { p.audioSender = pc.addTrack(call.sendTrack); tuneSender(p.audioSender); }
-  else p.audioSender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
-  if (call?.videoTrack) p.videoSender = pc.addTrack(call.videoTrack);
+  if (!videoOnly) {
+    if (call?.sendTrack) { p.audioSender = pc.addTrack(call.sendTrack); tuneSender(p.audioSender); }
+    else p.audioSender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+    p.micMid = null;
+  }
+  if (call?.videoTrack) { p.videoSender = pc.addTrack(call.videoTrack); tuneVideo(p.videoSender); }
+  else if (videoOnly && initiator) pc.addTransceiver('video', { direction: 'recvonly' });
+  if (call?.shareAudio && !p.videoOnly) p.shareSender = pc.addTrack(call.shareAudio);
 
   const negotiate = async () => {
     if (p.waitOffer || pc.signalingState === 'closed') return;
@@ -297,12 +310,20 @@ function ensurePeer(id, initiator, native) {
   // если предложение так и не пришло — начинаем сами
   if (p.waitOffer) p.waitTimer = setTimeout(() => { if (p.waitOffer && !pc.remoteDescription) { p.waitOffer = false; negotiate(); } }, 3500);
   pc.onicecandidate = ({ candidate }) => { if (candidate) signal(id, { candidate }); };
-  pc.ontrack = ({ track }) => {
+  pc.ontrack = ({ track, transceiver }) => {
     if (track.kind === 'audio') {
+      if (call?.native) return; // в приложении на iPhone голос идёт через нативный звук
       const ms = new MediaStream([track]);
-      p.audioEl.srcObject = ms;
-      p.audioEl.play().catch(showAudioUnlock);
-      addMeter(id, ms);
+      // первая звуковая дорожка — микрофон, следующая — звук показа экрана (игра, видео)
+      if (p.micMid == null || p.micMid === transceiver?.mid) {
+        p.micMid = transceiver?.mid ?? '0';
+        p.audioEl.srcObject = ms;
+        p.audioEl.play().catch(showAudioUnlock);
+        addMeter(id, ms);
+      } else {
+        p.shareEl.srcObject = ms;
+        p.shareEl.play().catch(showAudioUnlock);
+      }
     } else {
       p.videoEl.srcObject = new MediaStream([track]);
       if (S.channelId === call?.channelId) renderTiles();
@@ -326,8 +347,9 @@ function restartPeer(p) {
 
 // сигналы обрабатываем строго по очереди: иначе кандидаты маршрута могут обогнать описание соединения
 function onSignal(from, data) {
+  // собеседник из приложения на iPhone пересоздал соединение (приложение было свёрнуто)
+  if (data?.reset) { closePeer(from); if (S.channelId === call?.channelId) renderTiles(); return; }
   const p = ensurePeer(from, false);
-  if (!p.pc) return;
   p.chain = p.chain.then(() => handleSignal(p, data)).catch(() => {});
 }
 async function handleSignal(p, { description, candidate }) {
@@ -357,6 +379,7 @@ function closePeer(id) {
   try { p.pc?.close(); } catch {}
   p.audioEl.srcObject = null;
   p.audioEl.remove();
+  if (p.shareEl) { p.shareEl.srcObject = null; p.shareEl.remove(); }
   p.videoEl.srcObject = null;
   p.videoEl.remove();
   removeMeter(id);
@@ -376,6 +399,9 @@ function cleanupCall(keepService) {
   if (!call) return;
   if (call.native) {
     if (!keepService) nativeCall()?.stopAudio().catch(() => {});
+    if (call.screen) stopNativeScreen(true);
+    for (const id of [...peers.keys()]) closePeer(id);
+    clearFrames();
     for (const id of nativeSpeaking) $$(`[data-speak="${CSS.escape(id)}"]`).forEach((el) => el.classList.remove('speaking'));
     nativeSpeaking.clear();
     call = null;
@@ -455,6 +481,7 @@ function applyPeerVolume(p) {
   const v = call?.deafened ? 0 : Math.max(0, Math.min(1, (uid && prefs.vol[uid] != null ? prefs.vol[uid] : 1) * prefs.outVol));
   p.audioEl.volume = v;
   p.audioEl.muted = v === 0;
+  if (p.shareEl) { p.shareEl.volume = v; p.shareEl.muted = v === 0; }
   if (p.relayGain) p.relayGain.gain.value = v;
 }
 function setUserVolume(userId, v) {
@@ -467,23 +494,148 @@ function setUserVolume(userId, v) {
 const nativeNoVideo = () => toast('В приложении на iPhone пока только голос. Видео — в браузере или на ПК');
 async function toggleCamera() {
   if (!call) return;
-  if (call.native) return nativeNoVideo();
+  if (call.native) return toast('В приложении на iPhone камера пока недоступна — можно показать экран');
   if (call.video && !call.screen) return setVideo(null, false);
   try {
     const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } });
     setVideo(s.getVideoTracks()[0], false);
   } catch { toast('Нет доступа к камере'); }
 }
+/* --- демонстрация экрана --- */
+const SCREEN_Q = { '720p30': [720, 30, 2500000], '1080p30': [1080, 30, 4000000], '1080p60': [1080, 60, 6000000] };
+const screenQ = () => SCREEN_Q[prefs.screenQ] || SCREEN_Q['1080p30'];
+const phoneScreen = () => isNative && !!nativeCall() && (window.Capacitor?.getPlatform?.() === 'android' || isIOSApp);
+const canShareScreen = () => canScreen || phoneScreen();
 async function toggleScreen() {
   if (!call) return;
-  if (call.native) return nativeNoVideo();
+  if (phoneScreen()) return call.screen ? stopNativeScreen() : startNativeScreen();
   if (call.screen) return setVideo(null, false);
+  const [h, fps] = screenQ();
+  let s;
   try {
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false });
-    const t = s.getVideoTracks()[0];
-    t.onended = () => { if (call?.videoTrack === t) setVideo(null, false); };
-    setVideo(t, true);
+    s = await navigator.mediaDevices.getDisplayMedia({
+      video: { height: { ideal: h }, frameRate: { ideal: fps, max: fps } },
+      // звук: вкладка браузера или весь звук компьютера (Windows) — для игр и видео
+      audio: prefs.screenAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false } : false,
+      systemAudio: prefs.screenAudio ? 'include' : 'exclude',
+      surfaceSwitching: 'include',
+      selfBrowserSurface: 'exclude',
+    });
+  } catch { return; }
+  if (!call) { s.getTracks().forEach((t) => t.stop()); return; }
+  const t = s.getVideoTracks()[0];
+  try { t.contentHint = fps >= 60 ? 'motion' : 'detail'; } catch {}
+  t.onended = () => { if (call?.videoTrack === t) setVideo(null, false); };
+  setShareAudio(s.getAudioTracks()[0] || null);
+  setVideo(t, true);
+  if (prefs.screenAudio && !s.getAudioTracks().length) toast('Экран показывается без звука: в окне выбора включи «Поделиться звуком»');
+}
+// звук показа экрана: отдельная дорожка в прямых соединениях + подмешиваем в запасной путь через сервер (для iPhone-приложения)
+function setShareAudio(track) {
+  const old = call.shareAudio;
+  if (old === track) return;
+  call.shareAudio = track;
+  try { call.shareSrc?.disconnect(); } catch {}
+  call.shareSrc = null;
+  if (track && audioCtx && call.capture) {
+    try { call.shareSrc = audioCtx.createMediaStreamSource(new MediaStream([track])); call.shareSrc.connect(call.capture); } catch {}
+  }
+  for (const p of peers.values()) {
+    if (!p.pc || p.videoOnly) continue;
+    if (p.shareSender) { p.shareSender.replaceTrack(track).catch(() => {}); if (!track) { try { p.pc.removeTrack(p.shareSender); } catch {} p.shareSender = null; } }
+    else if (track) p.shareSender = p.pc.addTrack(track);
+  }
+  old?.stop();
+}
+function tuneVideo(sender) {
+  if (!call?.screen || !sender) return;
+  const [, fps, br] = screenQ();
+  try {
+    const prm = sender.getParameters();
+    if (!prm.encodings || !prm.encodings.length) prm.encodings = [{}];
+    prm.encodings[0].maxBitrate = br;
+    prm.encodings[0].maxFramerate = fps;
+    prm.degradationPreference = fps >= 60 ? 'maintain-framerate' : 'maintain-resolution';
+    sender.setParameters(prm).catch(() => {});
   } catch {}
+}
+
+/* показ экрана с телефона: нативный захват → кадры на сервер → зрителям */
+async function startNativeScreen() {
+  const ios = isIOSApp;
+  if (ios) {
+    const c = await nativeCall().caps().catch(() => null);
+    if (!c?.screen) return toast('Скачай новую версию приложения — в ней есть показ экрана');
+  }
+  const res = await new Promise((ok) => socket.emit('screen:start', { kind: ios ? 'ios' : 'android' }, ok));
+  if (!call) return;
+  if (res?.error) return toast(res.error);
+  const url = ((typeof API !== 'undefined' && API) || location.origin).replace(/^http/i, 'ws') + '/ns?t=' + encodeURIComponent(res.ticket);
+  const [h, fps] = screenQ();
+  try {
+    await nativeCall().screenStart({ url, height: Math.min(h, 1080), fps: Math.min(fps, 20) });
+  } catch (e) {
+    socket.emit('screen:stop');
+    const msg = String(e?.message || e || '');
+    if (/not implemented|unimplemented/i.test(msg)) toast('Скачай новую версию приложения — в ней есть показ экрана');
+    else if (!/cancel|отмен|denied/i.test(msg)) toast('Не получилось начать показ экрана');
+    return;
+  }
+  call.screen = true;
+  call.video = true;
+  if (ios) toast('Выбери «Волна» и нажми «Начать трансляцию»');
+  pushVoiceState();
+}
+function stopNativeScreen(silent) {
+  nativeCall()?.screenStop?.().catch(() => {});
+  socket?.emit('screen:stop');
+  if (!call) return;
+  call.screen = false;
+  call.video = false;
+  if (!silent) pushVoiceState();
+}
+
+/* кадры экрана с телефонов */
+const frames = new Map(); // socketId -> { img, url }
+function frameImg(id) {
+  let f = frames.get(id);
+  if (!f) {
+    const img = document.createElement('img');
+    img.className = 'frame';
+    img.alt = '';
+    f = { img, url: null, busy: false };
+    frames.set(id, f);
+  }
+  return f.img;
+}
+function onFrame(from, data) {
+  frameImg(from);
+  const f = frames.get(from);
+  if (f.busy) return; // ещё рисуем предыдущий — пропускаем кадр
+  f.busy = true;
+  const url = URL.createObjectURL(new Blob([data], { type: 'image/jpeg' }));
+  f.img.onload = f.img.onerror = () => { f.busy = false; if (f.url && f.url !== url) URL.revokeObjectURL(f.url); f.url = url; };
+  f.img.src = url;
+  const st = (S.voice[call?.channelId] || []).find((x) => x.socketId === from);
+  if (st && !f.shown && S.channelId === call?.channelId) { f.shown = true; renderTiles(); }
+}
+function clearFrames(id) {
+  for (const [k, f] of frames) {
+    if (id && k !== id) continue;
+    if (f.url) URL.revokeObjectURL(f.url);
+    f.img.remove();
+    frames.delete(k);
+  }
+}
+/* во весь экран */
+function fullscreenTile(id) {
+  const t = $(`.tile[data-tile="${CSS.escape(id)}"]`);
+  if (!t) return;
+  const v = t.querySelector('video');
+  if (document.fullscreenElement) return document.exitFullscreen().catch(() => {});
+  if (t.requestFullscreen) return t.requestFullscreen().catch(() => v?.webkitEnterFullscreen?.());
+  if (t.webkitRequestFullscreen) return t.webkitRequestFullscreen();
+  v?.webkitEnterFullscreen?.(); // iPhone: только видео
 }
 function setVideo(track, isScreen) {
   if (!call) { track?.stop(); return; }
@@ -491,11 +643,15 @@ function setVideo(track, isScreen) {
   call.videoTrack = track;
   call.video = !!track;
   call.screen = !!track && isScreen;
+  if (!call.screen && call.shareAudio) setShareAudio(null);
   for (const p of peers.values()) {
     if (!p.pc) continue;
     if (p.videoSender) p.videoSender.replaceTrack(track).catch(() => {});
     else if (track) p.videoSender = p.pc.addTrack(track);
+    tuneVideo(p.videoSender);
   }
+  if (call.screen) S.focus = call.selfId;
+  else if (S.focus === call.selfId) S.focus = null;
   if (old && old !== track) old.stop();
   if (track) {
     if (!call.localVideo) {
@@ -714,8 +870,19 @@ function hideRing() {
 
 function bindVoiceSocket() {
   socket.on('voice:state', ({ channelId, states }) => {
-    const before = (S.voice[channelId] || []).length;
+    const prevStates = S.voice[channelId] || [];
+    const before = prevStates.length;
     S.voice[channelId] = states;
+    // кто-то начал показ экрана — сразу разворачиваем его
+    if (call?.channelId === channelId) {
+      const sharing = (id) => !!states.find((x) => x.socketId === id)?.screen;
+      // закончил показывать — сворачиваем; начал кто-то другой — разворачиваем его
+      if (S.focus && prevStates.find((y) => y.socketId === S.focus)?.screen && !sharing(S.focus)) S.focus = null;
+      if (!S.focus || !sharing(S.focus)) {
+        const started = states.find((x) => x.screen && x.socketId !== call.selfId && !prevStates.find((y) => y.socketId === x.socketId && y.screen));
+        if (started) S.focus = started.socketId;
+      }
+    }
     states.forEach((s) => rememberUser({ id: s.userId, username: s.username, displayName: s.displayName, color: s.color, avatar: s.avatar, ring: s.ring }));
     if (call?.channelId === channelId) {
       if (states.length > before && before) sfx('join');
@@ -727,8 +894,14 @@ function bindVoiceSocket() {
     if (S.channelId === channelId) { renderTiles(); renderHeader(); }
   });
   socket.on('voice:peer-joined', (st) => { if (call && !call.native && st.socketId !== call.selfId) ensurePeer(st.socketId, false, st.native); });
-  socket.on('voice:peer-left', ({ socketId }) => { if (peers.has(socketId)) sfx('leave'); closePeer(socketId); });
-  socket.on('voice:signal', ({ from, data }) => { if (call && !call.native) onSignal(from, data); });
+  socket.on('voice:peer-left', ({ socketId }) => { if (peers.has(socketId)) sfx('leave'); closePeer(socketId); clearFrames(socketId); });
+  socket.on('voice:signal', ({ from, data }) => { if (call) onSignal(from, data); });
+  socket.on('screen:frame', ({ from, data }) => { if (call) onFrame(from, data); });
+  socket.on('screen:end', ({ from }) => {
+    clearFrames(from);
+    if (call && from === call.selfId && call.screen && phoneScreen()) { call.screen = false; call.video = false; nativeCall()?.screenStop?.().catch(() => {}); renderVoicePanel(); }
+    if (S.channelId === call?.channelId) renderTiles();
+  });
   socket.on('voice:audio', ({ from, data }) => { if (call && !call.native) playRelay(from, data); });
   socket.on('voice:kicked', () => { cleanupCall(); toast('Ты отключён от голосового канала'); });
   socket.on('call:ring', ({ channelId, from }) => showRing(channelId, from));

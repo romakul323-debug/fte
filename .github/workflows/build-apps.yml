@@ -81,6 +81,11 @@ jobs:
           npm ci --no-audit --no-fund
           node prepare-web.js
           npx cap sync ios
+      - name: Расширение показа экрана (iPhone)
+        working-directory: app
+        run: |
+          ruby -e "require 'xcodeproj'" 2>/dev/null || sudo gem install xcodeproj --no-document
+          ruby ios/add-broadcast.rb
       - name: Сборка
         working-directory: app/ios/App
         run: |
@@ -132,6 +137,12 @@ jobs:
           npm ci --no-audit --no-fund
           node prepare-web.js
           npx cap sync ios
+      - name: Расширение показа экрана (iPhone)
+        if: env.HAS_ASC == 'true'
+        working-directory: app
+        run: |
+          ruby -e "require 'xcodeproj'" 2>/dev/null || sudo gem install xcodeproj --no-document
+          ruby ios/add-broadcast.rb
       - name: Ключ API Apple
         if: env.HAS_ASC == 'true'
         env:

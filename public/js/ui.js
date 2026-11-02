@@ -131,7 +131,7 @@ function ctlButtons() {
   return `<button class="ctl ${call.muted ? 'off' : ''}" data-act="mute" title="Микрофон">${call.muted ? ICON.micOff : ICON.mic}</button>
     <button class="ctl ${call.deafened ? 'off' : ''}" data-act="deafen" title="Звук">${call.deafened ? ICON.headOff : ICON.head}</button>
     <button class="ctl ${call.video && !call.screen ? 'on' : ''}" data-act="camera" title="Камера">${ICON.cam}</button>
-    ${canScreen ? `<button class="ctl ${call.screen ? 'on' : ''}" data-act="screen" title="Демонстрация экрана">${ICON.screen}</button>` : ''}`;
+    ${canShareScreen() ? `<button class="ctl ${call.screen ? 'on' : ''}" data-act="screen" title="Демонстрация экрана">${ICON.screen}</button>` : ''}`;
 }
 function renderVoicePanel() {
   const p = $('#voicePanel');
@@ -324,13 +324,18 @@ function renderTiles() {
     t.dataset.tile = v.socketId;
     t.style.setProperty('--tilebg', `radial-gradient(80% 70% at 50% 40%, ${safeColor(u.accent || u.color)}33, transparent 70%)`);
     let vid = null;
-    if (inThis && v.video) vid = v.socketId === call.selfId ? call.localVideo : peers.get(v.socketId)?.videoEl;
+    if (inThis && v.video) vid = v.socketId === call.selfId ? call.localVideo : v.frames ? frameImg(v.socketId) : peers.get(v.socketId)?.videoEl;
     if (vid) {
       t.classList.add('has-video');
       if (v.screen) t.classList.add('screen');
       t.appendChild(vid);
-      vid.play().catch(() => {});
-    } else t.insertAdjacentHTML('beforeend', avatar(u, 'lg'));
+      vid.play?.().catch(() => {});
+      if (v.socketId !== call.selfId) t.insertAdjacentHTML('beforeend', `<button class="tile-fs" data-act="fs" data-id="${esc(v.socketId)}" title="Во весь экран">${ICON.expand}</button>`);
+    } else {
+      t.insertAdjacentHTML('beforeend', avatar(u, 'lg'));
+      if (inThis && v.socketId === call.selfId && call.screen) t.insertAdjacentHTML('beforeend', '<div class="tile-warn soft" style="top:auto;bottom:52px;left:50%;right:auto;transform:translateX(-50%)">Ты показываешь экран</div>');
+    }
+    if (v.screen && !vid && inThis && v.socketId !== call.selfId) t.insertAdjacentHTML('beforeend', '<div class="tile-warn soft">загружаю экран…</div>');
     if (inThis && v.socketId !== call.selfId) {
       const p = peers.get(v.socketId);
       const pst = p?.pc?.connectionState;
@@ -758,7 +763,18 @@ function tabVoice(body) {
       ${sw('agc', prefs.agc, 'Автоусиление микрофона')}</div>
     <div class="st-sec"><h4>Громкость</h4><label>Общая громкость собеседников: <span id="outVal">${Math.round(prefs.outVol * 100)}%</span><input type="range" min="0" max="100" value="${Math.round(prefs.outVol * 100)}" data-range="outVol"></label>
       <p class="hint2">Громкость каждого человека — в его карточке во время звонка.${isIOS ? ' На iPhone браузер меняет только включено/выключено.' : ''}</p></div>
+    <div class="st-sec"><h4>Демонстрация экрана</h4>
+      <div class="chips">${[['720p30', '720p · 30 к/с'], ['1080p30', '1080p · 30 к/с'], ['1080p60', '1080p · 60 к/с (игры)']].map(([k, t]) => `<button class="chip ${prefs.screenQ === k ? 'on' : ''}" data-screenq="${k}">${t}</button>`).join('')}</div>
+      <p class="hint2">Чем выше качество, тем быстрее нужен интернет у тебя и у зрителей. Новое качество — со следующего показа. С телефона экран показывается до 20 к/с.</p>
+      ${sw('screenAudio', prefs.screenAudio, 'Показывать со звуком', 'Звук игры или видео. На ПК в окне выбора включи «Поделиться звуком» (для всего экрана — звук системы).')}</div>
     <div class="st-sec"><h4>Если звук пропадает</h4><p class="hint2">Волна сама возвращает звук после прерываний: игр, других звонков, сворачивания. Если в игре включён свой голосовой чат, он может забирать микрофон — выключи его в настройках игры.</p></div>`;
+  body.onclick = (e) => {
+    const q = e.target.closest('[data-screenq]');
+    if (!q) return;
+    prefs.screenQ = q.dataset.screenq;
+    savePrefs();
+    $$('[data-screenq]', body).forEach((b) => b.classList.toggle('on', b === q));
+  };
   bindPrefInputs(body, () => {
     $('#sensRow').hidden = prefs.autoSens;
     $('#mtThr').style.left = pos(prefs.sens) + '%';

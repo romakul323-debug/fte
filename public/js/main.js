@@ -331,6 +331,7 @@ const ACT = {
   camera: toggleCamera,
   screen: toggleScreen,
   leave: leaveVoice,
+  fs: (el) => fullscreenTile(el.dataset.id),
   logout: () => { if (confirm('Выйти из аккаунта?')) logout(); },
   settings: (el) => openSettings(el.dataset.tab),
   'close-settings': closeSettings,

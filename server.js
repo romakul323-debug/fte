@@ -401,9 +401,25 @@ const io = new Server(server, { cors: { origin: true }, maxHttpBufferSize: 1e6, 
 
 // соединение для звука из приложения на iPhone
 const nativeWss = new (require('ws').WebSocketServer)({ noServer: true, maxPayload: 8192, perMessageDeflate: false });
+const screenWss = new (require('ws').WebSocketServer)({ noServer: true, maxPayload: 600 * 1024, perMessageDeflate: false });
 server.on('upgrade', (req, sock, head) => {
   let u;
   try { u = new URL(req.url, 'http://x'); } catch { return; }
+  if (u.pathname === '/ns') {
+    // кадры экрана: по билету (Android) или «по заявке» (расширение iPhone не знает билета — берём ожидающий показ с того же адреса)
+    let sl = screenLegs.get(u.searchParams.get('t') || '');
+    if (!sl && u.searchParams.get('claim')) {
+      const ip = clientIp(req);
+      const waiting = [...screenLegs.values()].filter((x) => x.kind === 'ios' && !x.ws && !x.dead).sort((a, b) => b.at - a.at);
+      sl = waiting.find((x) => x.ip && x.ip === ip) || (waiting.length === 1 ? waiting[0] : null);
+    }
+    if (!sl || sl.dead) {
+      sock.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    screenWss.handleUpgrade(req, sock, head, (ws) => attachScreen(sl, ws));
+    return;
+  }
   if (u.pathname !== '/nv') return;
   const leg = legs.get(u.searchParams.get('t') || '');
   if (!leg || leg.dead) {
@@ -413,6 +429,13 @@ server.on('upgrade', (req, sock, head) => {
   nativeWss.handleUpgrade(req, sock, head, (ws) => attachLeg(leg, ws));
 });
 setInterval(() => {
+  for (const sl of screenLegs.values()) {
+    const ws = sl.ws;
+    if (!ws) continue;
+    if (!ws.isAlive) { try { ws.terminate(); } catch {} continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch {}
+  }
   for (const leg of legByPub.values()) {
     const ws = leg.ws;
     if (!ws) continue;
@@ -438,7 +461,7 @@ const online = new Map(); // userId -> кол-во подключений
 const voice = new Map(); // channelId -> Map(socketId -> состояние)
 const voiceOf = new Map(); // socketId -> channelId
 
-const SERVER_VERSION = 3;
+const SERVER_VERSION = 4;
 const voiceList = (channelId) => [...(voice.get(channelId)?.values() || [])];
 
 // «Нативный звук» (приложение на iPhone): звук звонка идёт не через WebView, а через отдельное
@@ -497,7 +520,8 @@ function removeVoiceEntry(chId, key) {
     m.delete(key);
     if (!m.size) voice.delete(chId);
   }
-  io.to('v:' + chId).emit('voice:peer-left', { socketId: key });
+  endScreen(screenOf.get(key));
+  io.to('v:' + chId).to('vw:' + chId).emit('voice:peer-left', { socketId: key });
   broadcastVoice(chId);
 }
 
@@ -506,6 +530,7 @@ function leaveVoice(socket) {
   if (!chId) return;
   voiceOf.delete(socket.id);
   const leg = legOf.get(socket.id);
+  socket.leave('vw:' + chId);
   if (leg) return dropLeg(leg);
   socket.leave('v:' + chId);
   removeVoiceEntry(chId, socket.id);
@@ -517,6 +542,7 @@ function dropLeg(leg) {
   clearTimeout(leg.gone);
   legs.delete(leg.secret);
   legByPub.delete(leg.pub);
+  if (leg.webSid) io.in(leg.webSid).socketsLeave('vw:' + leg.chId);
   if (leg.webSid && legOf.get(leg.webSid) === leg) {
     legOf.delete(leg.webSid);
     voiceOf.delete(leg.webSid);
@@ -537,6 +563,56 @@ function toLegs(chId, from, data) {
     }
     leg.ws.send(frame, { binary: true });
   }
+}
+
+// ---------- показ экрана с телефонов (JPEG-кадры) ----------
+const screenLegs = new Map(); // секрет -> показ
+const screenOf = new Map(); // ключ участника -> показ
+function clientIp(req) {
+  return String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+}
+function endScreen(sl) {
+  if (!sl || sl.dead) return;
+  sl.dead = true;
+  clearTimeout(sl.gone);
+  screenLegs.delete(sl.secret);
+  if (screenOf.get(sl.key) === sl) screenOf.delete(sl.key);
+  try { sl.ws?.close(4000, 'stop'); } catch {}
+  const st = voice.get(sl.chId)?.get(sl.key);
+  if (st && st.frames) {
+    st.frames = false;
+    st.screen = false;
+    st.video = false;
+    broadcastVoice(sl.chId);
+  }
+  io.to('v:' + sl.chId).to('vw:' + sl.chId).emit('screen:end', { from: sl.key });
+}
+function attachScreen(sl, ws) {
+  if (sl.dead) return ws.close(4000, 'stop');
+  if (sl.ws) try { sl.ws.terminate(); } catch {}
+  sl.ws = ws;
+  clearTimeout(sl.gone);
+  ws.isAlive = true;
+  ws.on('pong', () => (ws.isAlive = true));
+  const st = voice.get(sl.chId)?.get(sl.key);
+  if (st) {
+    st.frames = true;
+    st.screen = true;
+    st.video = true;
+    broadcastVoice(sl.chId);
+  }
+  let last = 0;
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary || sl.dead || data.length < 100) return;
+    const now = Date.now();
+    if (now - last < 45) return; // не больше ~20 кадров в секунду
+    last = now;
+    let t = io.to('v:' + sl.chId).to('vw:' + sl.chId);
+    if (sl.webSid) t = t.except(sl.webSid);
+    t.volatile.emit('screen:frame', { from: sl.key, data });
+  });
+  ws.on('close', () => { if (sl.ws === ws) endScreen(sl); });
+  ws.on('error', () => {});
 }
 
 function attachLeg(leg, ws) {
@@ -938,7 +1014,8 @@ io.on('connection', (socket) => {
     voiceOf.set(socket.id, c.id);
     io.to('v:' + c.id).emit('voice:peer-joined', st);
     // нативному участнику WebRTC-сигналы и звук через socket.io не нужны — звук идёт по своему соединению
-    if (!leg) socket.join('v:' + c.id);
+    // нативному участнику (iPhone) звук через socket.io не нужен — только сигналы для видео и кадры экрана
+    socket.join((leg ? 'vw:' : 'v:') + c.id);
     broadcastVoice(c.id);
     // звонок в личке: показать собеседнику входящий вызов
     if (c.type === 'dm' && !peers.length) for (const x of c.members) if (x !== me.id) io.to('u:' + x).emit('call:ring', { channelId: c.id, from: pubUser(me) });
@@ -957,6 +1034,7 @@ io.on('connection', (socket) => {
     leg.webSid = socket.id;
     legOf.set(socket.id, leg);
     voiceOf.set(socket.id, leg.chId);
+    socket.join('vw:' + leg.chId);
     const st = voice.get(leg.chId)?.get(leg.pub);
     reply(cb, { channelId: leg.chId, selfId: leg.pub, muted: !!st?.muted, deafened: !!st?.deafened });
   });
@@ -987,9 +1065,28 @@ io.on('connection', (socket) => {
   // пересылка WebRTC-сигналов только между участниками одного канала
   on('voice:signal', ({ to, data }) => {
     const chId = voiceOf.get(socket.id);
-    if (!chId || voiceOf.get(to) !== chId) return;
-    io.to(to).emit('voice:signal', { from: socket.id, data });
+    if (!chId || !voice.get(chId)?.has(to)) return;
+    // участнику из приложения на iPhone — в его WebView
+    const leg = legByPub.get(to);
+    const target = leg ? leg.webSid : to;
+    if (target) io.to(target).emit('voice:signal', { from: voiceKey(socket), data });
   });
+
+  // показ экрана с телефона: кадры приходят по отдельному соединению из нативного кода
+  on('screen:start', ({ kind } = {}, cb) => {
+    const chId = voiceOf.get(socket.id);
+    const key = voiceKey(socket);
+    const st = chId && voice.get(chId)?.get(key);
+    if (!st) return reply(cb, { error: 'Сначала зайди в голосовой канал' });
+    endScreen(screenOf.get(key));
+    const sl = { secret: crypto.randomBytes(18).toString('hex'), key, chId, userId: me.id, webSid: socket.id, ws: null, kind: kind === 'ios' ? 'ios' : 'android', ip: clientIp(socket.request), at: Date.now(), dead: false };
+    screenLegs.set(sl.secret, sl);
+    screenOf.set(key, sl);
+    // ждём, пока нативная часть подключится (на iPhone пользователь ещё должен нажать «Начать трансляцию»)
+    sl.gone = setTimeout(() => endScreen(sl), sl.kind === 'ios' ? 120000 : 30000);
+    reply(cb, { ticket: sl.secret });
+  });
+  on('screen:stop', () => endScreen(screenOf.get(voiceKey(socket))));
 
   socket.on('disconnect', () => {
     // WebView уснул (iPhone, приложение свёрнуто), а звук в приложении работает — остаёмся в звонке

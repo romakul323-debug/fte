@@ -1,6 +1,7 @@
 import UIKit
 import Capacitor
 import AVFoundation
+import ReplayKit
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -47,8 +48,11 @@ public class VolnaCallPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startAudio", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopAudio", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setState", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "screenStart", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "screenStop", returnType: CAPPluginReturnPromise)
     ]
+    private var picker: RPSystemBroadcastPickerView?
     private var active = false
 
     override public func load() {
@@ -60,7 +64,35 @@ public class VolnaCallPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func caps(_ call: CAPPluginCall) {
-        call.resolve(["audio": true, "version": 1])
+        call.resolve(["audio": true, "screen": true, "version": 2])
+    }
+
+    // Показ экрана: открываем системное окно «Запись экрана» с расширением Волны.
+    // Кадры отправляет расширение VolnaScreen, а сервер показывает их всем в канале.
+    @objc func screenStart(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let view = self.bridge?.viewController?.view else { call.reject("no view"); return }
+            self.picker?.removeFromSuperview()
+            let p = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
+            p.preferredExtension = (Bundle.main.bundleIdentifier ?? "ru.volna.messenger") + ".VolnaScreen"
+            p.showsMicrophoneButton = false
+            p.alpha = 0.02
+            view.addSubview(p)
+            self.picker = p
+            for sub in p.subviews {
+                if let b = sub as? UIButton { b.sendActions(for: .allTouchEvents) }
+            }
+            call.resolve()
+        }
+    }
+
+    // остановить трансляцию из приложения нельзя — это делает сервер, закрывая соединение расширения
+    @objc func screenStop(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.picker?.removeFromSuperview()
+            self.picker = nil
+            call.resolve()
+        }
     }
 
     // старый режим (звук через WebView) — оставлен для совместимости
@@ -527,7 +559,9 @@ final class VolnaAudio: NSObject, URLSessionWebSocketDelegate {
     // MARK: соединение с сервером
     private func connect() {
         guard active, let url = url else { return }
-        let t = session.webSocketTask(with: url)
+        var req = URLRequest(url: url)
+        req.setValue("VolnaApp/1.0", forHTTPHeaderField: "User-Agent")
+        let t = session.webSocketTask(with: req)
         t.maximumMessageSize = 1 << 16
         task = t
         t.resume()

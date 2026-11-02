@@ -70,6 +70,7 @@ const ICON = {
   dots: I('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'),
   menu: I('<path d="M3 6h18M3 12h18M3 18h18"/>'),
   back: I('<path d="m15 18-6-6 6-6"/>'),
+  expand: I('<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>'),
   chev: I('<path d="m9 18 6-6-6-6"/>'),
   send: I('<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>'),
   trash: I('<path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/>'),
@@ -145,7 +146,7 @@ function toast(msg) {
 const PREF_DEF = {
   wall: 'ocean', wallImg: null, glass: 0.085, blur: 26, still: false, fontSize: 15,
   sounds: true, ringSound: true, desktop: false,
-  gate: true, autoSens: true, sens: -45, ns: true, ec: true, agc: true, outVol: 1,
+  gate: true, autoSens: true, sens: -45, ns: true, ec: true, agc: true, outVol: 1, screenQ: '1080p30', screenAudio: true,
   vol: {}, // громкость каждого участника: userId -> 0..1
 };
 const prefs = Object.assign({}, PREF_DEF, store.json('prefs', {}));

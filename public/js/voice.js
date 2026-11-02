@@ -16,7 +16,7 @@ function ensureCtx() {
 async function loadWorklet() {
   if (!audioCtx?.audioWorklet) return false;
   if (audioCtx.__wl) return audioCtx.__wl;
-  audioCtx.__wl = audioCtx.audioWorklet.addModule('relay-worklet.js?v=3').then(() => true).catch((e) => { console.warn('worklet', e); return false; });
+  audioCtx.__wl = audioCtx.audioWorklet.addModule('relay-worklet.js?v=6').then(() => true).catch((e) => { console.warn('worklet', e); return false; });
   return audioCtx.__wl;
 }
 const micConstraints = () => ({ audio: { echoCancellation: prefs.ec, noiseSuppression: prefs.ns, autoGainControl: prefs.agc, channelCount: 1 }, video: false });
